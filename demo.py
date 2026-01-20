@@ -107,10 +107,12 @@ def main():
 
     # Lambda parameters for cross-channel deconvolution
     # Format: [ch_idx (1-based), lambda_residual, lambda_tv, lambda_black, lambda_cross_ch..., n_detail_layers]
+    # Note: Original MATLAB used lambda_residual=750, lambda_tv=0.5, lambda_cross=1.0
+    # We use stronger regularization to avoid banding artifacts in Python
     lambda_params = np.array([
-        [1, 300, 1.0, 0.0, 0.0, 0.0, 0.0, 1],  # Channel 1 (sharp reference)
-        [2, 750, 0.5, 0.0, 1.0, 0.0, 0.0, 0],  # Channel 2, coupled to channel 1
-        [3, 750, 0.5, 0.0, 1.0, 0.0, 0.0, 0],  # Channel 3, coupled to channel 1
+        [1, 200, 2.0, 0.0, 0.0, 0.0, 0.0, 1],  # Channel 1 (sharp reference)
+        [2, 200, 2.0, 0.0, 3.0, 0.0, 0.0, 0],  # Channel 2, coupled to channel 1
+        [3, 200, 2.0, 0.0, 3.0, 0.0, 0.0, 0],  # Channel 3, coupled to channel 1
     ])
 
     # Run primal-dual cross-channel deconvolution
