@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# If we're already inside nix, just run.
+if [[ -n "${IN_NIX_SHELL:-}" ]]; then
+  exec "$@"
+fi
+
+# Enter the env and re-run the command.
+if [[ -f flake.nix ]]; then
+  exec nix develop -c "$@"
+else
+  exec nix-shell --run "$(printf '%q ' "$@")"
+fi
