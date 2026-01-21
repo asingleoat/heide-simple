@@ -38,7 +38,63 @@ Deconvolve with a Gaussian blur estimate:
 ./dev python deconvolve.py blurry.jpg --gaussian 2.5 -o sharp.png
 ```
 
-## Command-Line Usage
+## PSF Estimation
+
+If you don't have a known PSF for your lens, you can estimate it using calibration images.
+
+### Quick PSF Estimation
+
+```bash
+# Generate a calibration pattern to print
+./dev python estimate_psf.py --generate-pattern -o calibration.png
+
+# Estimate PSF from sharp/blurred image pair
+./dev python estimate_psf.py --sharp pinhole.png --blurred wide_aperture.png --size 31 -o psf.png
+```
+
+### Calibration Workflow
+
+1. **Generate calibration pattern**:
+   ```bash
+   ./dev python estimate_psf.py --generate-pattern --patch-size 128 --grid 4x4 -o calibration.png
+   ```
+
+2. **Print the pattern** and mount it flat
+
+3. **Capture two photos**:
+   - Sharp reference: Use pinhole/small aperture (e.g., f/22)
+   - Blurred image: Use wide aperture (e.g., f/2.8)
+
+4. **Estimate PSF**:
+   ```bash
+   ./dev python estimate_psf.py --sharp-pattern sharp.png --blurred-pattern blurred.png \
+       --size 43 --grid 4x4 -o psf.png
+   ```
+
+### Per-Channel PSF Estimation
+
+For lenses with chromatic aberration, estimate separate PSFs for each color channel:
+
+```bash
+./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
+    --size 31 --per-channel -o psf
+# Creates: psf_red.png, psf_green.png, psf_blue.png
+```
+
+### PSF Estimation Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--size` | 31 | PSF size in pixels (must be odd) |
+| `--lambda-tv` | 0.001 | TV regularization on PSF |
+| `--mu-sum` | 50.0 | Sum-to-one constraint weight |
+| `--max-iter` | 500 | Maximum iterations |
+| `--per-channel` | off | Estimate separate PSF per color channel |
+| `--patch-size` | 128 | Noise patch size in calibration pattern |
+| `--grid` | 4x4 | Grid of patches in calibration pattern |
+| `--border` | 20 | Border width (should be ≥ expected blur radius) |
+
+## Command-Line Usage (Deconvolution)
 
 ```
 usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
@@ -93,6 +149,8 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 
 ## Python API
 
+### Deconvolution
+
 ```python
 from deconv import pd_joint_deconv, img_to_norm_grayscale
 import numpy as np
@@ -120,6 +178,31 @@ result = pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4)
 
 # Extract results
 output = np.stack([result[i]['image'] for i in range(3)], axis=2)
+```
+
+### PSF Estimation
+
+```python
+from deconv import estimate_psf, create_calibration_pattern, extract_patches_from_images
+import numpy as np
+
+# Option 1: Estimate from a single sharp/blurred pair
+sharp = ...   # Sharp reference image (pinhole aperture)
+blurred = ... # Blurred image (wide aperture)
+
+psf = estimate_psf(sharp, blurred, psf_size=31,
+                   lambda_tv=0.001, mu_sum=50.0)
+
+# Option 2: Generate calibration pattern
+pattern, patch_coords = create_calibration_pattern(
+    patch_size=128, n_patches_h=4, n_patches_w=4, border_width=20
+)
+
+# Option 3: Estimate from calibration pattern photos
+sharp_patches, blurred_patches = extract_patches_from_images(
+    sharp_image, blurred_image, patch_coords
+)
+psf = estimate_psf_from_patches(sharp_patches, blurred_patches, psf_size=31)
 ```
 
 ## Algorithm Overview
@@ -160,10 +243,12 @@ This creates synthetic test data with chromatic aberration and demonstrates the 
 
 ## Files
 
-- `deconvolve.py` - Command-line tool
+- `deconvolve.py` - Command-line deconvolution tool
+- `estimate_psf.py` - Command-line PSF estimation tool
 - `demo.py` - Demonstration script with synthetic data
 - `deconv/` - Core algorithm package
-  - `pd_joint_deconv.py` - Main primal-dual algorithm
+  - `pd_joint_deconv.py` - Main primal-dual deconvolution algorithm
+  - `psf_estimation.py` - PSF estimation algorithm
   - `operator_norm.py` - Operator norm computation
   - `utils.py` - Utility functions (psf2otf, edgetaper, etc.)
 - `DIFFERENCES_FROM_MATLAB.md` - Documentation of differences from original MATLAB
