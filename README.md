@@ -246,12 +246,21 @@ This creates synthetic test data with chromatic aberration and demonstrates the 
 - `deconvolve.py` - Command-line deconvolution tool
 - `estimate_psf.py` - Command-line PSF estimation tool
 - `demo.py` - Demonstration script with synthetic data
+- `test_algorithms.py` - Test script to verify algorithms
 - `deconv/` - Core algorithm package
   - `pd_joint_deconv.py` - Main primal-dual deconvolution algorithm
   - `psf_estimation.py` - PSF estimation algorithm
   - `operator_norm.py` - Operator norm computation
   - `utils.py` - Utility functions (psf2otf, edgetaper, etc.)
 - `DIFFERENCES_FROM_MATLAB.md` - Documentation of differences from original MATLAB
+
+## Testing
+
+Run the test script to verify the algorithms:
+
+```bash
+./dev python test_algorithms.py
+```
 
 ## License
 

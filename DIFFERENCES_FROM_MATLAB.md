@@ -201,3 +201,36 @@ When adapting parameters for different images/kernels:
 2. Increase `lambda_tv` (1.0-3.0) for smoother results
 3. Increase `lambda_cross` (2.0-5.0) for stronger cross-channel guidance
 4. Monitor row-to-row variation in output to detect banding artifacts
+
+## PSF Estimation
+
+The PSF estimation algorithm from Section 6 of the paper has been implemented in `deconv/psf_estimation.py`.
+
+### Algorithm
+
+The estimation solves:
+```
+b_opt = argmin_b ||Ib - s·j||² + λ||∇b||₁ + μ||1ᵀb - 1||²
+```
+
+Using the same Chambolle-Pock primal-dual framework as the deconvolution (Eq. 21 in paper).
+
+### Implementation Notes
+
+- The sharp image I is FFT'd directly (not using psf2otf) since it acts as a convolution kernel
+- PSF is extracted from the top-left corner after circular shifting
+- Sum-to-one constraint is enforced via the DC component in Fourier domain
+- Default parameters: `lambda_tv=0.001`, `mu_sum=50.0`
+
+### Features Not Implemented
+
+- Scale-space PSF estimation (Section 6.3) - would improve convergence speed for large PSFs
+- Automatic tile-based spatially-varying PSF estimation - user must manually extract patches
+
+### Typical Estimation Accuracy
+
+With synthetic test data:
+- Gaussian PSF: ~12% relative error
+- Box PSF: ~19% relative error
+- Motion blur: ~25% relative error
+- Delta (no blur): <1% error
