@@ -8,9 +8,54 @@ image, with smooth blending at tile boundaries.
 import numpy as np
 from pathlib import Path
 import re
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .pd_joint_deconv import pd_joint_deconv
 from .utils import img_to_norm_grayscale
+from .tracing import trace
+
+
+def _process_tile_worker(args):
+    """
+    Worker function to process a single tile (must be module-level for pickling).
+
+    Returns the tile result along with metadata needed for blending.
+    """
+    (tile_idx, tile_image, psf, n_channels, tile_row, tile_col,
+     y_start, y_end, x_start, x_end, h, w,
+     overlap_h, overlap_w,
+     lambda_residual, lambda_tv, lambda_cross,
+     max_iterations, tolerance) = args
+
+    # Deconvolve tile
+    tile_result = _deconvolve_single(
+        tile_image, psf, n_channels,
+        lambda_residual, lambda_tv, lambda_cross,
+        max_iterations, tolerance, verbose=False
+    )
+
+    # Create blending weights
+    tile_h = y_end - y_start
+    tile_w = x_end - x_start
+    tile_weight = _create_blend_weights(
+        tile_h, tile_w,
+        y_start == 0, y_end == h,
+        x_start == 0, x_end == w,
+        overlap_h, overlap_w
+    )
+
+    return {
+        'tile_idx': tile_idx,
+        'tile_row': tile_row,
+        'tile_col': tile_col,
+        'result': tile_result,
+        'weight': tile_weight,
+        'y_start': y_start,
+        'y_end': y_end,
+        'x_start': x_start,
+        'x_end': x_end,
+    }
 
 
 def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None):
@@ -96,7 +141,8 @@ def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None):
 
 def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
                      lambda_residual=200, lambda_tv=2.0, lambda_cross=3.0,
-                     max_iterations=200, tolerance=1e-4, verbose=False):
+                     max_iterations=200, tolerance=1e-4, n_workers=1,
+                     verbose=False):
     """
     Deconvolve an image using spatially-varying PSFs.
 
@@ -123,6 +169,9 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
         Maximum iterations per tile/channel
     tolerance : float
         Convergence tolerance
+    n_workers : int
+        Number of parallel workers. 1 = sequential, 0 = auto (use all CPUs),
+        >1 = use specified number of workers. Default: 1
     verbose : bool
         Print progress information
 
@@ -133,10 +182,11 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     """
     image = np.asarray(image, dtype=np.float64)
     n_tiles_h, n_tiles_w = tile_grid
+    n_tiles = n_tiles_h * n_tiles_w
 
-    if len(psfs) != n_tiles_h * n_tiles_w:
+    if len(psfs) != n_tiles:
         raise ValueError(f"Number of PSFs ({len(psfs)}) must match "
-                        f"tile grid ({n_tiles_h}x{n_tiles_w}={n_tiles_h*n_tiles_w})")
+                        f"tile grid ({n_tiles_h}x{n_tiles_w}={n_tiles})")
 
     # Handle grayscale vs color
     if image.ndim == 2:
@@ -150,18 +200,28 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     overlap_h = int(base_tile_h * overlap)
     overlap_w = int(base_tile_w * overlap)
 
+    # Determine number of workers
+    if n_workers == 0:
+        n_workers = os.cpu_count() or 1
+    use_parallel = n_workers > 1 and n_tiles > 1
+
     if verbose:
         print(f"Tile-based deconvolution")
         print(f"  Image: {w}x{h}, {n_channels} channel(s)")
         print(f"  Tiles: {n_tiles_w}x{n_tiles_h}")
         print(f"  Tile size: ~{base_tile_w}x{base_tile_h} (with {int(overlap*100)}% overlap)")
+        if use_parallel:
+            print(f"  Workers: {n_workers} (parallel)")
+        else:
+            print(f"  Workers: 1 (sequential)")
 
     # Output accumulator and weight accumulator for blending
     output = np.zeros_like(image)
     weights = np.zeros((h, w), dtype=np.float64)
 
-    # Process each tile
-    for tile_idx in range(n_tiles_h * n_tiles_w):
+    # Prepare tile arguments
+    tile_args = []
+    for tile_idx in range(n_tiles):
         tile_row = tile_idx // n_tiles_w
         tile_col = tile_idx % n_tiles_w
         psf = psfs[tile_idx]
@@ -172,39 +232,77 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
         x_start = max(0, tile_col * base_tile_w - overlap_w)
         x_end = min(w, (tile_col + 1) * base_tile_w + overlap_w)
 
-        tile_h = y_end - y_start
-        tile_w = x_end - x_start
+        # Extract tile image (copy for multiprocessing)
+        tile_image = image[y_start:y_end, x_start:x_end, :].copy()
 
-        if verbose:
-            print(f"\n--- Tile ({tile_row}, {tile_col}) ---")
-            print(f"  Region: [{y_start}:{y_end}, {x_start}:{x_end}]")
-
-        # Extract tile from image
-        tile_image = image[y_start:y_end, x_start:x_end, :]
-
-        # Deconvolve tile
-        tile_result = _deconvolve_single(
-            tile_image, psf, n_channels,
+        tile_args.append((
+            tile_idx, tile_image, psf, n_channels, tile_row, tile_col,
+            y_start, y_end, x_start, x_end, h, w,
+            overlap_h, overlap_w,
             lambda_residual, lambda_tv, lambda_cross,
-            max_iterations, tolerance, verbose
-        )
+            max_iterations, tolerance
+        ))
 
-        # Create blending weights (cosine taper at edges that overlap with neighbors)
-        tile_weight = _create_blend_weights(
-            tile_h, tile_w,
-            y_start == 0, y_end == h,  # is_top, is_bottom
-            x_start == 0, x_end == w,  # is_left, is_right
-            overlap_h, overlap_w
-        )
+    if use_parallel:
+        # Parallel processing using threads
+        # NumPy/SciPy release the GIL during heavy computation, so threading works well
+        with trace("parallel_tiles"):
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                futures = {executor.submit(_process_tile_worker, args): args[0]
+                          for args in tile_args}
 
-        # Accumulate weighted results
-        for ch in range(n_channels):
-            output[y_start:y_end, x_start:x_end, ch] += tile_result[:, :, ch] * tile_weight
-        weights[y_start:y_end, x_start:x_end] += tile_weight
+                for future in as_completed(futures):
+                    tile_result = future.result()
+                    tile_row = tile_result['tile_row']
+                    tile_col = tile_result['tile_col']
+
+                    if verbose:
+                        print(f"  Completed tile ({tile_row}, {tile_col})")
+
+                    # Accumulate
+                    y_start = tile_result['y_start']
+                    y_end = tile_result['y_end']
+                    x_start = tile_result['x_start']
+                    x_end = tile_result['x_end']
+                    tile_res = tile_result['result']
+                    tile_weight = tile_result['weight']
+
+                    for ch in range(n_channels):
+                        output[y_start:y_end, x_start:x_end, ch] += tile_res[:, :, ch] * tile_weight
+                    weights[y_start:y_end, x_start:x_end] += tile_weight
+    else:
+        # Sequential processing (original behavior)
+        for args in tile_args:
+            tile_idx = args[0]
+            tile_row = args[4]
+            tile_col = args[5]
+
+            if verbose:
+                y_start, y_end = args[6], args[7]
+                x_start, x_end = args[8], args[9]
+                print(f"\n--- Tile ({tile_row}, {tile_col}) ---")
+                print(f"  Region: [{y_start}:{y_end}, {x_start}:{x_end}]")
+
+            with trace(f"deconv_tile_{tile_row}_{tile_col}"):
+                tile_result = _process_tile_worker(args)
+
+            # Accumulate
+            y_start = tile_result['y_start']
+            y_end = tile_result['y_end']
+            x_start = tile_result['x_start']
+            x_end = tile_result['x_end']
+            tile_res = tile_result['result']
+            tile_weight = tile_result['weight']
+
+            with trace("accumulate"):
+                for ch in range(n_channels):
+                    output[y_start:y_end, x_start:x_end, ch] += tile_res[:, :, ch] * tile_weight
+                weights[y_start:y_end, x_start:x_end] += tile_weight
 
     # Normalize by accumulated weights
-    for ch in range(n_channels):
-        output[:, :, ch] /= np.maximum(weights, 1e-10)
+    with trace("normalize"):
+        for ch in range(n_channels):
+            output[:, :, ch] /= np.maximum(weights, 1e-10)
 
     # Remove extra dimension for grayscale
     if output.shape[2] == 1:

@@ -21,7 +21,7 @@ import numpy as np
 import imageio.v3 as iio
 from scipy.ndimage import gaussian_filter
 
-from deconv import pd_joint_deconv, img_to_norm_grayscale, deconvolve_tiled, load_tiled_psfs
+from deconv import pd_joint_deconv, img_to_norm_grayscale, deconvolve_tiled, load_tiled_psfs, tracer, trace
 
 
 def create_gaussian_kernel(sigma, size=None):
@@ -126,9 +126,10 @@ def deconvolve_image(image, kernels, lambda_residual=200, lambda_tv=2.0,
 
     # Run deconvolution
     verbose_mode = 'brief' if verbose else 'none'
-    result = pd_joint_deconv(channels, lambda_params,
-                             max_it=max_iterations, tol=tolerance,
-                             verbose=verbose_mode)
+    with trace("pd_joint_deconv"):
+        result = pd_joint_deconv(channels, lambda_params,
+                                 max_it=max_iterations, tol=tolerance,
+                                 verbose=verbose_mode)
 
     # Gather results
     output = np.zeros_like(image)
@@ -186,6 +187,9 @@ Kernel specification (one required):
                         help='Tile grid for spatially-varying deconvolution, e.g., 3x3')
     parser.add_argument('--tile-overlap', type=float, default=0.25,
                         help='Tile overlap fraction 0-0.5 (default: 0.25)')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Number of parallel workers for tiled deconvolution. '
+                             '0=auto (all CPUs), 1=sequential (default: 1)')
 
     # Channel options
     parser.add_argument('--channels', type=str, default='rgb',
@@ -213,8 +217,14 @@ Kernel specification (one required):
                         help='Print progress information')
     parser.add_argument('--16bit', dest='bit16', action='store_true',
                         help='Save as 16-bit image')
+    parser.add_argument('--trace', action='store_true',
+                        help='Enable performance tracing and print timing summary')
 
     args = parser.parse_args()
+
+    # Enable tracing if requested
+    if args.trace:
+        tracer.enable()
 
     # Validate input
     if not args.input.exists():
@@ -237,17 +247,18 @@ Kernel specification (one required):
     if args.verbose:
         print(f"Loading image: {args.input}")
 
-    image = iio.imread(args.input)
-    original_dtype = image.dtype
+    with trace("load_image"):
+        image = iio.imread(args.input)
+        original_dtype = image.dtype
 
-    # Convert to float [0, 1]
-    if np.issubdtype(original_dtype, np.integer):
-        info = np.iinfo(original_dtype)
-        image = image.astype(np.float64) / info.max
-    else:
-        image = image.astype(np.float64)
-        if image.max() > 1.0:
-            image = image / image.max()
+        # Convert to float [0, 1]
+        if np.issubdtype(original_dtype, np.integer):
+            info = np.iinfo(original_dtype)
+            image = image.astype(np.float64) / info.max
+        else:
+            image = image.astype(np.float64)
+            if image.max() > 1.0:
+                image = image / image.max()
 
     if args.verbose:
         print(f"Image size: {image.shape[1]} x {image.shape[0]}")
@@ -258,7 +269,8 @@ Kernel specification (one required):
     if not args.linear:
         if args.verbose:
             print(f"Applying inverse gamma (gamma={args.gamma})")
-        image = np.power(image, args.gamma)
+        with trace("gamma_decode"):
+            image = np.power(image, args.gamma)
 
     # Handle channel selection
     if image.ndim == 3 and image.shape[2] >= 3:
@@ -312,6 +324,7 @@ Kernel specification (one required):
             lambda_cross=args.lambda_cross,
             max_iterations=args.max_iter,
             tolerance=args.tolerance,
+            n_workers=args.workers,
             verbose=args.verbose
         )
     else:
@@ -370,6 +383,10 @@ Kernel specification (one required):
     iio.imwrite(args.output, result)
 
     print(f"Deconvolved image saved to: {args.output}")
+
+    # Print tracing summary if enabled
+    if args.trace:
+        tracer.print_summary()
 
 
 if __name__ == '__main__':

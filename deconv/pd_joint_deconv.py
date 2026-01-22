@@ -12,6 +12,7 @@ from scipy.fft import fft2, ifft2
 
 from .utils import psf2otf, edgetaper, imconv
 from .operator_norm import compute_operator_norm
+from .tracing import trace, tracer
 
 
 def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brief'):
@@ -81,38 +82,42 @@ def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brie
         ks = channels[ch_opt]['kernel'].shape[0]
 
         # Pad and edgetaper all channels
-        channels_padded = []
-        db_chs_padded = []
-        for ch_idx in range(n_channels):
-            # Pad with replicate boundary
-            img_pad = np.pad(channels[ch_idx]['image'], ks, mode='edge')
-            db_pad = np.pad(db_chs[ch_idx]['image'], ks, mode='edge')
+        with trace("pad_and_edgetaper"):
+            channels_padded = []
+            db_chs_padded = []
+            for ch_idx in range(n_channels):
+                # Pad with replicate boundary
+                with trace("pad"):
+                    img_pad = np.pad(channels[ch_idx]['image'], ks, mode='edge')
+                    db_pad = np.pad(db_chs[ch_idx]['image'], ks, mode='edge')
 
-            # Edgetaper
-            kernel = channels[ch_opt]['kernel']
-            for _ in range(4):
-                img_pad = edgetaper(img_pad, kernel)
-                db_pad = edgetaper(db_pad, kernel)
+                # Edgetaper
+                with trace("edgetaper"):
+                    kernel = channels[ch_opt]['kernel']
+                    for _ in range(4):
+                        img_pad = edgetaper(img_pad, kernel)
+                        db_pad = edgetaper(db_pad, kernel)
 
-            # Add offset (MATLAB code adds 1.0)
-            img_pad = img_pad + 1.0
-            db_pad = db_pad + 1.0
+                # Add offset (MATLAB code adds 1.0)
+                img_pad = img_pad + 1.0
+                db_pad = db_pad + 1.0
 
-            channels_padded.append({
-                'image': img_pad,
-                'kernel': channels[ch_idx]['kernel']
-            })
-            db_chs_padded.append({
-                'image': db_pad,
-                'kernel': db_chs[ch_idx]['kernel']
-            })
+                channels_padded.append({
+                    'image': img_pad,
+                    'kernel': channels[ch_idx]['kernel']
+                })
+                db_chs_padded.append({
+                    'image': db_pad,
+                    'kernel': db_chs[ch_idx]['kernel']
+                })
 
         # Run residual PD deconvolution
-        result = _residual_pd_deconv(
-            channels_padded, db_chs_padded, ch_opt,
-            w_res, w_tv, w_black, w_cross,
-            res_iter, tol, max_it, verbose
-        )
+        with trace("residual_pd_deconv"):
+            result = _residual_pd_deconv(
+                channels_padded, db_chs_padded, ch_opt,
+                w_res, w_tv, w_black, w_cross,
+                res_iter, tol, max_it, verbose
+            )
 
         # Remove padding and offset
         for ch_idx in range(n_channels):
@@ -185,10 +190,11 @@ def _pd_channel_deconv(channels, ch, x_0, db_chs,
     Primal-dual deconvolution for a single channel.
     """
     # Prepare FFT-based solver components
-    sizey = channels[ch]['image'].shape
-    otfk = psf2otf(channels[ch]['kernel'], sizey)
-    Nomin1 = np.conj(otfk) * fft2(channels[ch]['image'])
-    Denom1 = np.abs(otfk) ** 2
+    with trace("fft_setup"):
+        sizey = channels[ch]['image'].shape
+        otfk = psf2otf(channels[ch]['kernel'], sizey)
+        Nomin1 = np.conj(otfk) * fft2(channels[ch]['image'])
+        Denom1 = np.abs(otfk) ** 2
 
     # Compute operator norm for step size selection
     def A(x):
@@ -197,7 +203,8 @@ def _pd_channel_deconv(channels, ch, x_0, db_chs,
     def AS(x):
         return _KSmult(x, ch, db_chs, lambda_cross_ch, lambda_tv)
 
-    L = compute_operator_norm(A, AS, sizey)
+    with trace("operator_norm"):
+        L = compute_operator_norm(A, AS, sizey)
 
     # Primal-dual step sizes
     sigma = 1.0
@@ -210,28 +217,35 @@ def _pd_channel_deconv(channels, ch, x_0, db_chs,
     f1 = f.copy()
 
     # Primal-dual iterations
-    for i in range(max_it):
-        f_old = f.copy()
+    with trace("pd_iterations"):
+        for i in range(max_it):
+            f_old = f.copy()
 
-        # Dual update: g = prox_sigma_F*(g + sigma * K * f1)
-        g = _prox_fs(g + sigma * A(f1), sigma)
+            # Dual update: g = prox_sigma_F*(g + sigma * K * f1)
+            with trace("forward_op"):
+                Af1 = A(f1)
+            with trace("prox_dual"):
+                g = _prox_fs(g + sigma * Af1, sigma)
 
-        # Primal update: f = prox_tau_G(f - tau * K* * g)
-        f = _solve_fft(Nomin1, Denom1, tau, lambda_residual, f - tau * AS(g))
+            # Primal update: f = prox_tau_G(f - tau * K* * g)
+            with trace("adjoint_op"):
+                ASg = AS(g)
+            with trace("fft_solve"):
+                f = _solve_fft(Nomin1, Denom1, tau, lambda_residual, f - tau * ASg)
 
-        # Over-relaxation
-        f1 = f + theta * (f - f_old)
+            # Over-relaxation
+            f1 = f + theta * (f - f_old)
 
-        # Check convergence
-        diff = (f + tol_offset) - (f_old + tol_offset)
-        f_comp = f + tol_offset
-        rel_diff = np.linalg.norm(diff.ravel()) / (np.linalg.norm(f_comp.ravel()) + 1e-10)
+            # Check convergence
+            diff = (f + tol_offset) - (f_old + tol_offset)
+            f_comp = f + tol_offset
+            rel_diff = np.linalg.norm(diff.ravel()) / (np.linalg.norm(f_comp.ravel()) + 1e-10)
 
-        if verbose in ('brief', 'all'):
-            print(f"Ch: {ch + 1}, iter {i + 1}, diff {rel_diff:.5g}")
+            if verbose in ('brief', 'all'):
+                print(f"Ch: {ch + 1}, iter {i + 1}, diff {rel_diff:.5g}")
 
-        if rel_diff < tol:
-            break
+            if rel_diff < tol:
+                break
 
     return f1
 

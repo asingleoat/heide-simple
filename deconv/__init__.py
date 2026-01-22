@@ -18,3 +18,4 @@ from .psf_estimation import (
     smooth_psf_spatially,
 )
 from .tiled_deconv import deconvolve_tiled, load_tiled_psfs
+from .tracing import tracer, trace
