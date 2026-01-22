@@ -81,6 +81,25 @@ For lenses with chromatic aberration, estimate separate PSFs for each color chan
 # Creates: psf_red.png, psf_green.png, psf_blue.png
 ```
 
+### Multiscale PSF Estimation
+
+For faster convergence on large PSFs, use scale-space estimation:
+
+```bash
+./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
+    --size 63 --multiscale -o psf.png
+```
+
+### Spatially-Varying PSF (Tile-based)
+
+For lenses with spatially-varying blur (e.g., wide-angle lenses with field curvature), estimate PSFs across a tile grid:
+
+```bash
+./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
+    --size 31 --tiles 3x3 -o psf.png
+# Creates: psf_tile_0_0.png, psf_tile_0_1.png, ..., psf_tile_2_2.png, and psf.png (combined grid)
+```
+
 ### PSF Estimation Options
 
 | Option | Default | Description |
@@ -90,6 +109,11 @@ For lenses with chromatic aberration, estimate separate PSFs for each color chan
 | `--mu-sum` | 50.0 | Sum-to-one constraint weight |
 | `--max-iter` | 500 | Maximum iterations |
 | `--per-channel` | off | Estimate separate PSF per color channel |
+| `--multiscale` | off | Use scale-space estimation (faster for large PSFs) |
+| `--n-scales` | auto | Number of scales for multiscale |
+| `--tiles` | off | Tile grid for spatially-varying PSF (e.g., 3x3) |
+| `--tile-overlap` | 0.25 | Tile overlap fraction (0-0.5) |
+| `--smooth-sigma` | 1.0 | Spatial smoothing between tile PSFs |
 | `--patch-size` | 128 | Noise patch size in calibration pattern |
 | `--grid` | 4x4 | Grid of patches in calibration pattern |
 | `--border` | 20 | Border width (should be ≥ expected blur radius) |
@@ -183,7 +207,11 @@ output = np.stack([result[i]['image'] for i in range(3)], axis=2)
 ### PSF Estimation
 
 ```python
-from deconv import estimate_psf, create_calibration_pattern, extract_patches_from_images
+from deconv import (
+    estimate_psf, estimate_psf_multiscale, estimate_psf_tiled,
+    create_calibration_pattern, extract_patches_from_images,
+    get_psf_at_position
+)
 import numpy as np
 
 # Option 1: Estimate from a single sharp/blurred pair
@@ -193,12 +221,27 @@ blurred = ... # Blurred image (wide aperture)
 psf = estimate_psf(sharp, blurred, psf_size=31,
                    lambda_tv=0.001, mu_sum=50.0)
 
-# Option 2: Generate calibration pattern
+# Option 2: Multiscale estimation (faster for large PSFs)
+psf = estimate_psf_multiscale(sharp, blurred, psf_size=63,
+                              lambda_tv=0.001, mu_sum=50.0)
+
+# Option 3: Tile-based estimation for spatially-varying blur
+psfs, tile_centers, tile_grid = estimate_psf_tiled(
+    sharp, blurred, psf_size=31,
+    n_tiles_h=3, n_tiles_w=3, overlap=0.25
+)
+# Interpolate PSF at any position
+psf_at_center = get_psf_at_position(
+    psfs, tile_centers, tile_grid,
+    position=(h//2, w//2), image_shape=(h, w)
+)
+
+# Option 4: Generate calibration pattern
 pattern, patch_coords = create_calibration_pattern(
     patch_size=128, n_patches_h=4, n_patches_w=4, border_width=20
 )
 
-# Option 3: Estimate from calibration pattern photos
+# Option 5: Estimate from calibration pattern photos
 sharp_patches, blurred_patches = extract_patches_from_images(
     sharp_image, blurred_image, patch_coords
 )

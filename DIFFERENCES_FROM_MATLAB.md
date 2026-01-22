@@ -222,10 +222,12 @@ Using the same Chambolle-Pock primal-dual framework as the deconvolution (Eq. 21
 - Sum-to-one constraint is enforced via the DC component in Fourier domain
 - Default parameters: `lambda_tv=0.001`, `mu_sum=50.0`
 
-### Features Not Implemented
+### Additional Features (Beyond Original MATLAB)
 
-- Scale-space PSF estimation (Section 6.3) - would improve convergence speed for large PSFs
-- Automatic tile-based spatially-varying PSF estimation - user must manually extract patches
+- **Scale-space PSF estimation** (Section 6.3) - coarse-to-fine estimation for faster convergence with large PSFs
+- **Automatic tile-based PSF estimation** - divide image into tiles for spatially-varying blur estimation
+- **Spatial PSF smoothing** - Gaussian-weighted averaging of neighboring tile PSFs
+- **PSF interpolation** - bilinear interpolation to get PSF at arbitrary image positions
 
 ### Typical Estimation Accuracy
 

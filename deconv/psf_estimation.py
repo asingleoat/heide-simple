@@ -20,13 +20,172 @@ Where:
 
 import numpy as np
 from scipy.fft import fft2, ifft2
+from scipy.ndimage import zoom
 
 from .utils import psf2otf
 from .operator_norm import compute_operator_norm
 
 
+def estimate_psf_multiscale(sharp_patch, blurred_patch, psf_size, lambda_tv=0.001,
+                            mu_sum=50.0, max_it=500, tol=1e-5, n_scales=None,
+                            verbose='brief'):
+    """
+    Estimate PSF using scale-space approach (Section 6.3 of paper).
+
+    Performs PSF estimation in a coarse-to-fine manner, using the result
+    from each scale to initialize the next finer scale. This speeds up
+    convergence significantly for large PSFs.
+
+    Parameters
+    ----------
+    sharp_patch : ndarray
+        Sharp reference image
+    blurred_patch : ndarray
+        Blurred image
+    psf_size : int or tuple
+        Size of PSF to estimate at finest scale
+    lambda_tv : float
+        TV regularization weight (default: 0.001)
+    mu_sum : float
+        Sum-to-one constraint weight (default: 50.0)
+    max_it : int
+        Maximum iterations per scale (default: 500)
+    tol : float
+        Convergence tolerance (default: 1e-5)
+    n_scales : int, optional
+        Number of scales in pyramid. If None, automatically determined
+        based on PSF size (default: None)
+    verbose : str
+        'none', 'brief', or 'all'
+
+    Returns
+    -------
+    psf : ndarray
+        Estimated PSF at finest scale, normalized to sum to 1
+    """
+    sharp_patch = np.asarray(sharp_patch, dtype=np.float64)
+    blurred_patch = np.asarray(blurred_patch, dtype=np.float64)
+
+    if isinstance(psf_size, int):
+        psf_size = (psf_size, psf_size)
+
+    # Determine number of scales if not specified
+    # Use enough scales so coarsest PSF is at least 5x5
+    if n_scales is None:
+        min_psf_dim = min(psf_size)
+        n_scales = max(1, int(np.floor(np.log2(min_psf_dim / 5))) + 1)
+
+    if verbose in ('brief', 'all'):
+        print(f"Scale-space PSF estimation with {n_scales} scales")
+
+    # Build image pyramids (coarse to fine)
+    sharp_pyramid = _build_image_pyramid(sharp_patch, n_scales)
+    blurred_pyramid = _build_image_pyramid(blurred_patch, n_scales)
+
+    # Build PSF size pyramid (coarse to fine)
+    psf_sizes = []
+    for scale in range(n_scales):
+        factor = 2 ** (n_scales - 1 - scale)
+        scaled_size = (
+            max(3, (psf_size[0] + factor - 1) // factor | 1),  # Ensure odd
+            max(3, (psf_size[1] + factor - 1) // factor | 1)
+        )
+        psf_sizes.append(scaled_size)
+
+    # Start from coarsest scale
+    psf = None
+
+    for scale in range(n_scales):
+        current_psf_size = psf_sizes[scale]
+        sharp_scaled = sharp_pyramid[scale]
+        blurred_scaled = blurred_pyramid[scale]
+
+        if verbose in ('brief', 'all'):
+            print(f"\n--- Scale {scale + 1}/{n_scales} ---")
+            print(f"  Image size: {sharp_scaled.shape}")
+            print(f"  PSF size: {current_psf_size}")
+
+        # Initialize from previous scale (upsample) or delta
+        if psf is not None:
+            init_psf = _upsample_psf(psf, current_psf_size)
+        else:
+            init_psf = None
+
+        # Run estimation at this scale
+        # Use fewer iterations at coarse scales
+        scale_max_it = max_it if scale == n_scales - 1 else max(50, max_it // 2)
+
+        psf = estimate_psf(
+            sharp_scaled, blurred_scaled, current_psf_size,
+            lambda_tv=lambda_tv, mu_sum=mu_sum,
+            max_it=scale_max_it, tol=tol,
+            init_psf=init_psf,
+            verbose=verbose
+        )
+
+    return psf
+
+
+def _build_image_pyramid(image, n_scales):
+    """
+    Build a Gaussian pyramid of images (coarse to fine).
+
+    Parameters
+    ----------
+    image : ndarray
+        Input image
+    n_scales : int
+        Number of scales
+
+    Returns
+    -------
+    pyramid : list of ndarray
+        List of images from coarsest to finest
+    """
+    pyramid = [None] * n_scales
+
+    # Finest scale is the original image
+    pyramid[n_scales - 1] = image
+
+    # Build coarser scales by downsampling
+    current = image
+    for scale in range(n_scales - 2, -1, -1):
+        # Downsample by factor of 2 using bicubic interpolation
+        current = zoom(current, 0.5, order=3)
+        pyramid[scale] = current
+
+    return pyramid
+
+
+def _upsample_psf(psf, new_size):
+    """
+    Upsample a PSF to a new size using bicubic interpolation.
+
+    Parameters
+    ----------
+    psf : ndarray
+        Input PSF
+    new_size : tuple
+        Target size (height, width)
+
+    Returns
+    -------
+    upsampled : ndarray
+        Upsampled PSF, normalized to sum to 1
+    """
+    zoom_factors = (new_size[0] / psf.shape[0], new_size[1] / psf.shape[1])
+    upsampled = zoom(psf, zoom_factors, order=3)
+
+    # Ensure non-negative and normalized
+    upsampled = np.maximum(upsampled, 0)
+    upsampled = upsampled / (upsampled.sum() + 1e-10)
+
+    return upsampled
+
+
 def estimate_psf(sharp_patch, blurred_patch, psf_size, lambda_tv=0.001,
-                 mu_sum=50.0, max_it=500, tol=1e-5, verbose='brief'):
+                 mu_sum=50.0, max_it=500, tol=1e-5, init_psf=None,
+                 verbose='brief'):
     """
     Estimate PSF from sharp and blurred image patches.
 
@@ -57,6 +216,8 @@ def estimate_psf(sharp_patch, blurred_patch, psf_size, lambda_tv=0.001,
         Maximum iterations (default: 500)
     tol : float
         Convergence tolerance (default: 1e-5)
+    init_psf : ndarray, optional
+        Initial PSF estimate for warm-starting (default: None, uses delta)
     verbose : str
         'none', 'brief', or 'all'
 
@@ -91,9 +252,15 @@ def estimate_psf(sharp_patch, blurred_patch, psf_size, lambda_tv=0.001,
     # F(O) for a ones matrix of size psf_size is N at DC
     N_psf = np.prod(psf_size)
 
-    # Initialize PSF with delta at center
-    b = np.zeros(psf_size, dtype=np.float64)
-    b[psf_size[0] // 2, psf_size[1] // 2] = 1.0
+    # Initialize PSF (from provided init or delta at center)
+    if init_psf is not None:
+        b = np.asarray(init_psf, dtype=np.float64).copy()
+        # Ensure correct size
+        if b.shape != psf_size:
+            b = _upsample_psf(b, psf_size)
+    else:
+        b = np.zeros(psf_size, dtype=np.float64)
+        b[psf_size[0] // 2, psf_size[1] // 2] = 1.0
 
     # Compute operator norm for gradient K = ∇
     def K(x):
@@ -249,7 +416,8 @@ def _solve_psf_eq21(fft_I, fft_I_conj, fft_I_sq, fft_j, s,
 
 def estimate_psf_from_patches(sharp_patches, blurred_patches, psf_size,
                               lambda_tv=0.001, mu_sum=50.0, max_it=500,
-                              tol=1e-5, verbose='brief'):
+                              tol=1e-5, multiscale=False, n_scales=None,
+                              verbose='brief'):
     """
     Estimate PSF from multiple sharp/blurred patch pairs.
 
@@ -271,6 +439,10 @@ def estimate_psf_from_patches(sharp_patches, blurred_patches, psf_size,
         Maximum iterations per patch
     tol : float
         Convergence tolerance
+    multiscale : bool
+        Use scale-space estimation (default: False)
+    n_scales : int, optional
+        Number of scales for multiscale (auto if None)
     verbose : str
         Verbosity level
 
@@ -287,9 +459,15 @@ def estimate_psf_from_patches(sharp_patches, blurred_patches, psf_size,
         if verbose in ('brief', 'all'):
             print(f"\nEstimating PSF from patch {i + 1}/{len(sharp_patches)}")
 
-        psf = estimate_psf(sharp, blurred, psf_size,
-                          lambda_tv=lambda_tv, mu_sum=mu_sum,
-                          max_it=max_it, tol=tol, verbose=verbose)
+        if multiscale:
+            psf = estimate_psf_multiscale(sharp, blurred, psf_size,
+                                          lambda_tv=lambda_tv, mu_sum=mu_sum,
+                                          max_it=max_it, tol=tol,
+                                          n_scales=n_scales, verbose=verbose)
+        else:
+            psf = estimate_psf(sharp, blurred, psf_size,
+                              lambda_tv=lambda_tv, mu_sum=mu_sum,
+                              max_it=max_it, tol=tol, verbose=verbose)
         psfs.append(psf)
 
     # Average PSFs
@@ -400,6 +578,191 @@ def extract_patches_from_images(sharp_image, blurred_image, patch_coords,
         blurred_patches.append(blurred_image[y_start:y_end, x_start:x_end].copy())
 
     return sharp_patches, blurred_patches
+
+
+def estimate_psf_tiled(sharp_image, blurred_image, psf_size, n_tiles_h=3, n_tiles_w=3,
+                        overlap=0.25, lambda_tv=0.001, mu_sum=50.0, max_it=500,
+                        tol=1e-5, multiscale=False, n_scales=None, smooth_sigma=1.0,
+                        verbose='brief'):
+    """
+    Estimate spatially-varying PSF by dividing image into tiles.
+
+    This implements the tile-based approach from Section 6.3 of the paper for
+    handling spatially-varying blur across the image.
+
+    Parameters
+    ----------
+    sharp_image : ndarray
+        Sharp reference image (full size)
+    blurred_image : ndarray
+        Blurred image (full size)
+    psf_size : int or tuple
+        Size of PSF to estimate for each tile
+    n_tiles_h : int
+        Number of tiles vertically (default: 3)
+    n_tiles_w : int
+        Number of tiles horizontally (default: 3)
+    overlap : float
+        Fraction of tile size to overlap with neighbors (0-0.5, default: 0.25)
+    lambda_tv : float
+        TV regularization weight (default: 0.001)
+    mu_sum : float
+        Sum-to-one constraint weight (default: 50.0)
+    max_it : int
+        Maximum iterations (default: 500)
+    tol : float
+        Convergence tolerance (default: 1e-5)
+    multiscale : bool
+        Use scale-space estimation for each tile (default: False)
+    n_scales : int, optional
+        Number of scales for multiscale (auto if None)
+    smooth_sigma : float
+        Spatial smoothing sigma for neighboring PSFs in grid units (default: 1.0)
+        Set to 0 to disable smoothing.
+    verbose : str
+        'none', 'brief', or 'all'
+
+    Returns
+    -------
+    psfs : list of ndarray
+        List of estimated PSFs, one per tile
+    tile_centers : list of tuple
+        (row, col) center position of each tile in original image coordinates
+    tile_grid : tuple
+        (n_tiles_h, n_tiles_w) grid dimensions
+    """
+    sharp_image = np.asarray(sharp_image, dtype=np.float64)
+    blurred_image = np.asarray(blurred_image, dtype=np.float64)
+
+    if isinstance(psf_size, int):
+        psf_size = (psf_size, psf_size)
+
+    h, w = sharp_image.shape[:2]
+
+    # Calculate tile size with overlap
+    base_tile_h = h // n_tiles_h
+    base_tile_w = w // n_tiles_w
+    overlap_h = int(base_tile_h * overlap)
+    overlap_w = int(base_tile_w * overlap)
+
+    if verbose in ('brief', 'all'):
+        print(f"Tile-based PSF estimation")
+        print(f"  Image size: {w}x{h}")
+        print(f"  Tiles: {n_tiles_w}x{n_tiles_h}")
+        print(f"  Tile size: ~{base_tile_w}x{base_tile_h} (with {int(overlap*100)}% overlap)")
+
+    psfs = []
+    tile_centers = []
+    grid_positions = []
+
+    # Extract and process each tile
+    for i in range(n_tiles_h):
+        for j in range(n_tiles_w):
+            # Calculate tile boundaries with overlap
+            y_center = int((i + 0.5) * base_tile_h)
+            x_center = int((j + 0.5) * base_tile_w)
+
+            y_start = max(0, i * base_tile_h - overlap_h)
+            y_end = min(h, (i + 1) * base_tile_h + overlap_h)
+            x_start = max(0, j * base_tile_w - overlap_w)
+            x_end = min(w, (j + 1) * base_tile_w + overlap_w)
+
+            # Extract tile
+            sharp_tile = sharp_image[y_start:y_end, x_start:x_end]
+            blurred_tile = blurred_image[y_start:y_end, x_start:x_end]
+
+            if verbose in ('brief', 'all'):
+                print(f"\n--- Tile ({i+1}, {j+1}) / ({n_tiles_h}, {n_tiles_w}) ---")
+                print(f"  Region: [{y_start}:{y_end}, {x_start}:{x_end}]")
+
+            # Estimate PSF for this tile
+            if multiscale:
+                psf = estimate_psf_multiscale(
+                    sharp_tile, blurred_tile, psf_size,
+                    lambda_tv=lambda_tv, mu_sum=mu_sum,
+                    max_it=max_it, tol=tol, n_scales=n_scales,
+                    verbose=verbose
+                )
+            else:
+                psf = estimate_psf(
+                    sharp_tile, blurred_tile, psf_size,
+                    lambda_tv=lambda_tv, mu_sum=mu_sum,
+                    max_it=max_it, tol=tol,
+                    verbose=verbose
+                )
+
+            psfs.append(psf)
+            tile_centers.append((y_center, x_center))
+            grid_positions.append((i, j))
+
+    # Apply spatial smoothing if requested
+    if smooth_sigma > 0 and len(psfs) > 1:
+        if verbose in ('brief', 'all'):
+            print(f"\nApplying spatial smoothing (sigma={smooth_sigma})...")
+        psfs = smooth_psf_spatially(psfs, grid_positions, sigma=smooth_sigma)
+
+    return psfs, tile_centers, (n_tiles_h, n_tiles_w)
+
+
+def get_psf_at_position(psfs, tile_centers, tile_grid, position, image_shape):
+    """
+    Interpolate PSF at an arbitrary position in the image.
+
+    Uses bilinear interpolation between tile PSFs to get a smooth
+    spatially-varying PSF at any location.
+
+    Parameters
+    ----------
+    psfs : list of ndarray
+        List of PSFs from estimate_psf_tiled
+    tile_centers : list of tuple
+        Tile center positions from estimate_psf_tiled
+    tile_grid : tuple
+        (n_tiles_h, n_tiles_w) from estimate_psf_tiled
+    position : tuple
+        (row, col) position in the image
+    image_shape : tuple
+        (height, width) of the image
+
+    Returns
+    -------
+    psf : ndarray
+        Interpolated PSF at the given position
+    """
+    n_tiles_h, n_tiles_w = tile_grid
+    h, w = image_shape
+    y, x = position
+
+    # Normalize position to grid coordinates
+    grid_y = y / h * n_tiles_h - 0.5
+    grid_x = x / w * n_tiles_w - 0.5
+
+    # Find surrounding tiles
+    gy0 = max(0, min(n_tiles_h - 1, int(np.floor(grid_y))))
+    gy1 = max(0, min(n_tiles_h - 1, int(np.ceil(grid_y))))
+    gx0 = max(0, min(n_tiles_w - 1, int(np.floor(grid_x))))
+    gx1 = max(0, min(n_tiles_w - 1, int(np.ceil(grid_x))))
+
+    # Interpolation weights
+    wy = grid_y - gy0 if gy1 > gy0 else 0.5
+    wx = grid_x - gx0 if gx1 > gx0 else 0.5
+
+    # Get PSF indices
+    def get_idx(gi, gj):
+        return gi * n_tiles_w + gj
+
+    # Bilinear interpolation
+    psf = np.zeros_like(psfs[0])
+    psf += (1 - wy) * (1 - wx) * psfs[get_idx(gy0, gx0)]
+    psf += (1 - wy) * wx * psfs[get_idx(gy0, gx1)]
+    psf += wy * (1 - wx) * psfs[get_idx(gy1, gx0)]
+    psf += wy * wx * psfs[get_idx(gy1, gx1)]
+
+    # Normalize
+    psf = np.maximum(psf, 0)
+    psf = psf / (psf.sum() + 1e-10)
+
+    return psf
 
 
 def smooth_psf_spatially(psfs, positions, sigma=1.0):

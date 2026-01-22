@@ -31,7 +31,9 @@ import imageio.v3 as iio
 
 from deconv import (
     estimate_psf,
+    estimate_psf_multiscale,
     estimate_psf_from_patches,
+    estimate_psf_tiled,
     create_calibration_pattern,
     extract_patches_from_images,
     img_to_norm_grayscale,
@@ -56,6 +58,9 @@ Examples:
 
   # Estimate per-channel PSFs for chromatic aberration
   %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --per-channel -o psf
+
+  # Estimate spatially-varying PSF (3x3 tile grid)
+  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --tiles 3x3 -o psf
         """
     )
 
@@ -91,6 +96,18 @@ Examples:
                         help='Convergence tolerance (default: 1e-5)')
     parser.add_argument('--per-channel', action='store_true',
                         help='Estimate separate PSF for each color channel')
+    parser.add_argument('--multiscale', action='store_true',
+                        help='Use scale-space estimation for faster convergence')
+    parser.add_argument('--n-scales', type=int, default=None,
+                        help='Number of scales for multiscale (auto if not set)')
+
+    # Tile-based estimation for spatially-varying PSF
+    parser.add_argument('--tiles', type=str, default=None,
+                        help='Tile grid for spatially-varying PSF, e.g., 3x3 (default: disabled)')
+    parser.add_argument('--tile-overlap', type=float, default=0.25,
+                        help='Tile overlap fraction 0-0.5 (default: 0.25)')
+    parser.add_argument('--smooth-sigma', type=float, default=1.0,
+                        help='Spatial smoothing sigma for tile PSFs (default: 1.0, 0=disabled)')
 
     # Calibration pattern parameters
     parser.add_argument('--patch-size', type=int, default=128,
@@ -126,6 +143,16 @@ Examples:
         print(f"Error: Invalid grid format '{args.grid}'. Use format like '4x4'",
               file=sys.stderr)
         sys.exit(1)
+
+    # Parse tiles size if provided
+    tiles_h, tiles_w = None, None
+    if args.tiles:
+        try:
+            tiles_h, tiles_w = map(int, args.tiles.lower().split('x'))
+        except ValueError:
+            print(f"Error: Invalid tiles format '{args.tiles}'. Use format like '3x3'",
+                  file=sys.stderr)
+            sys.exit(1)
 
     verbose = 'brief' if args.verbose else 'none'
 
@@ -180,6 +207,53 @@ Examples:
         sharp = iio.imread(args.sharp)
         blurred = iio.imread(args.blurred)
 
+        # Handle tile-based estimation for spatially-varying PSF
+        if tiles_h is not None and tiles_w is not None:
+            if args.per_channel and sharp.ndim == 3:
+                print("Error: --per-channel and --tiles cannot be used together yet",
+                      file=sys.stderr)
+                sys.exit(1)
+
+            sharp_gray = img_to_norm_grayscale(sharp)
+            blurred_gray = img_to_norm_grayscale(blurred)
+
+            if args.verbose:
+                print(f"\nEstimating spatially-varying PSF...")
+                print(f"  Tiles: {tiles_w}x{tiles_h}")
+                print(f"  PSF size: {args.size}x{args.size}")
+
+            psfs, tile_centers, tile_grid = estimate_psf_tiled(
+                sharp_gray, blurred_gray, args.size,
+                n_tiles_h=tiles_h, n_tiles_w=tiles_w,
+                overlap=args.tile_overlap,
+                lambda_tv=args.lambda_tv,
+                mu_sum=args.mu_sum,
+                max_it=args.max_iter,
+                tol=args.tolerance,
+                multiscale=args.multiscale,
+                n_scales=args.n_scales,
+                smooth_sigma=args.smooth_sigma,
+                verbose=verbose
+            )
+
+            # Save individual tile PSFs
+            output_base = args.output.stem
+            output_ext = args.output.suffix or '.png'
+            for idx, ((row, col), psf) in enumerate(zip(
+                    [(i, j) for i in range(tiles_h) for j in range(tiles_w)], psfs)):
+                out_path = args.output.parent / f"{output_base}_tile_{row}_{col}{output_ext}"
+                _save_psf(psf, out_path, args.bit16)
+                if args.verbose:
+                    print(f"PSF (tile {row},{col}) saved to: {out_path}")
+
+            print(f"\nSaved {len(psfs)} tile PSFs to: {args.output.parent}/{output_base}_tile_*{output_ext}")
+
+            # Also save a combined visualization
+            _save_psf_grid(psfs, tiles_h, tiles_w, args.output, args.bit16)
+            print(f"Combined PSF grid saved to: {args.output}")
+
+            return
+
         # Handle per-channel estimation
         if args.per_channel and sharp.ndim == 3:
             psfs = []
@@ -191,14 +265,25 @@ Examples:
                 sharp_ch = img_to_norm_grayscale(sharp[:, :, ch])
                 blurred_ch = img_to_norm_grayscale(blurred[:, :, ch])
 
-                psf = estimate_psf(
-                    sharp_ch, blurred_ch, args.size,
-                    lambda_tv=args.lambda_tv,
-                    mu_sum=args.mu_sum,
-                    max_it=args.max_iter,
-                    tol=args.tolerance,
-                    verbose=verbose
-                )
+                if args.multiscale:
+                    psf = estimate_psf_multiscale(
+                        sharp_ch, blurred_ch, args.size,
+                        lambda_tv=args.lambda_tv,
+                        mu_sum=args.mu_sum,
+                        max_it=args.max_iter,
+                        tol=args.tolerance,
+                        n_scales=args.n_scales,
+                        verbose=verbose
+                    )
+                else:
+                    psf = estimate_psf(
+                        sharp_ch, blurred_ch, args.size,
+                        lambda_tv=args.lambda_tv,
+                        mu_sum=args.mu_sum,
+                        max_it=args.max_iter,
+                        tol=args.tolerance,
+                        verbose=verbose
+                    )
                 psfs.append(psf)
 
             # Save individual PSFs
@@ -219,14 +304,25 @@ Examples:
                 print(f"  lambda_tv: {args.lambda_tv}")
                 print(f"  mu_sum: {args.mu_sum}")
 
-            psf = estimate_psf(
-                sharp_gray, blurred_gray, args.size,
-                lambda_tv=args.lambda_tv,
-                mu_sum=args.mu_sum,
-                max_it=args.max_iter,
-                tol=args.tolerance,
-                verbose=verbose
-            )
+            if args.multiscale:
+                psf = estimate_psf_multiscale(
+                    sharp_gray, blurred_gray, args.size,
+                    lambda_tv=args.lambda_tv,
+                    mu_sum=args.mu_sum,
+                    max_it=args.max_iter,
+                    tol=args.tolerance,
+                    n_scales=args.n_scales,
+                    verbose=verbose
+                )
+            else:
+                psf = estimate_psf(
+                    sharp_gray, blurred_gray, args.size,
+                    lambda_tv=args.lambda_tv,
+                    mu_sum=args.mu_sum,
+                    max_it=args.max_iter,
+                    tol=args.tolerance,
+                    verbose=verbose
+                )
 
             _save_psf(psf, args.output, args.bit16)
             print(f"PSF saved to: {args.output}")
@@ -284,6 +380,8 @@ Examples:
                     mu_sum=args.mu_sum,
                     max_it=args.max_iter,
                     tol=args.tolerance,
+                    multiscale=args.multiscale,
+                    n_scales=args.n_scales,
                     verbose=verbose
                 )
 
@@ -311,6 +409,8 @@ Examples:
                 mu_sum=args.mu_sum,
                 max_it=args.max_iter,
                 tol=args.tolerance,
+                multiscale=args.multiscale,
+                n_scales=args.n_scales,
                 verbose=verbose
             )
 
@@ -339,6 +439,35 @@ def _save_psf(psf, output_path, bit16=False):
         psf_out = (psf_vis * 255).astype(np.uint8)
 
     iio.imwrite(output_path, psf_out)
+
+
+def _save_psf_grid(psfs, n_rows, n_cols, output_path, bit16=False):
+    """Save a grid of PSFs as a combined visualization."""
+    psf_h, psf_w = psfs[0].shape
+    border = 2
+
+    # Create combined image with borders
+    combined_h = n_rows * psf_h + (n_rows + 1) * border
+    combined_w = n_cols * psf_w + (n_cols + 1) * border
+    combined = np.ones((combined_h, combined_w))  # White background
+
+    # Place each PSF
+    for idx, psf in enumerate(psfs):
+        row = idx // n_cols
+        col = idx % n_cols
+        y_start = border + row * (psf_h + border)
+        x_start = border + col * (psf_w + border)
+
+        # Normalize individual PSF for visualization
+        psf_vis = psf / psf.max() if psf.max() > 0 else psf
+        combined[y_start:y_start + psf_h, x_start:x_start + psf_w] = psf_vis
+
+    if bit16:
+        combined_out = (combined * 65535).astype(np.uint16)
+    else:
+        combined_out = (combined * 255).astype(np.uint8)
+
+    iio.imwrite(output_path, combined_out)
 
 
 if __name__ == '__main__':

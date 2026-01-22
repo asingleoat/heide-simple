@@ -11,6 +11,8 @@ from scipy.ndimage import gaussian_filter, convolve
 from deconv import (
     pd_joint_deconv,
     estimate_psf,
+    estimate_psf_multiscale,
+    estimate_psf_tiled,
     create_calibration_pattern,
     img_to_norm_grayscale,
 )
@@ -118,6 +120,94 @@ def test_calibration_pattern():
     return passed
 
 
+def test_multiscale_psf_estimation():
+    """Test multiscale PSF estimation."""
+    print("=== Testing Multiscale PSF Estimation ===")
+
+    # Create calibration pattern
+    np.random.seed(42)
+    sharp = np.random.rand(64, 64)
+
+    # True PSF
+    true_psf = np.zeros((15, 15))
+    true_psf[7, 7] = 1.0
+    true_psf = gaussian_filter(true_psf, sigma=2.0)
+    true_psf = true_psf / true_psf.sum()
+
+    # Create blurred image
+    blurred = convolve(sharp, true_psf, mode='reflect')
+
+    # Estimate PSF using multiscale
+    estimated_psf = estimate_psf_multiscale(
+        sharp, blurred, psf_size=15,
+        lambda_tv=0.001, mu_sum=100.0,
+        max_it=500, n_scales=2, verbose='none'
+    )
+
+    # Check result
+    error = np.linalg.norm(estimated_psf - true_psf) / np.linalg.norm(true_psf)
+
+    true_center = np.unravel_index(true_psf.argmax(), true_psf.shape)
+    est_center = np.unravel_index(estimated_psf.argmax(), estimated_psf.shape)
+
+    print(f"  True PSF center: {true_center}")
+    print(f"  Estimated PSF center: {est_center}")
+    print(f"  Relative error: {error:.4f}")
+
+    passed = error < 0.2 and true_center == est_center
+    print(f"  Status: {'PASS' if passed else 'FAIL'}\n")
+    return passed
+
+
+def test_tiled_psf_estimation():
+    """Test tile-based PSF estimation for spatially-varying blur."""
+    print("=== Testing Tile-based PSF Estimation ===")
+
+    np.random.seed(42)
+
+    # Create a larger image for tiling
+    sharp = np.random.rand(128, 128)
+
+    # Create a PSF that varies across the image (simplified - same PSF everywhere)
+    true_psf = np.zeros((11, 11))
+    true_psf[5, 5] = 1.0
+    true_psf = gaussian_filter(true_psf, sigma=1.5)
+    true_psf = true_psf / true_psf.sum()
+
+    # Blur the image
+    blurred = convolve(sharp, true_psf, mode='reflect')
+
+    # Estimate PSFs using tile-based approach (2x2 grid)
+    psfs, tile_centers, tile_grid = estimate_psf_tiled(
+        sharp, blurred, psf_size=11,
+        n_tiles_h=2, n_tiles_w=2,
+        overlap=0.25,
+        lambda_tv=0.001, mu_sum=100.0,
+        max_it=200, smooth_sigma=0.5,
+        verbose='none'
+    )
+
+    # Check results
+    correct_count = len(psfs) == 4
+    correct_grid = tile_grid == (2, 2)
+    correct_centers = len(tile_centers) == 4
+
+    # Check that each PSF is reasonable (center is roughly correct)
+    all_centered = True
+    for psf in psfs:
+        est_center = np.unravel_index(psf.argmax(), psf.shape)
+        if est_center != (5, 5):
+            all_centered = False
+
+    print(f"  Number of PSFs: {len(psfs)}")
+    print(f"  Grid: {tile_grid}")
+    print(f"  All PSFs centered correctly: {all_centered}")
+
+    passed = correct_count and correct_grid and correct_centers and all_centered
+    print(f"  Status: {'PASS' if passed else 'FAIL'}\n")
+    return passed
+
+
 def test_cross_channel_deconvolution():
     """Test cross-channel deconvolution for chromatic aberration."""
     print("=== Testing Cross-Channel Deconvolution ===")
@@ -188,6 +278,8 @@ def main():
     results = []
     results.append(("Deconvolution", test_deconvolution()))
     results.append(("PSF Estimation", test_psf_estimation()))
+    results.append(("Multiscale PSF", test_multiscale_psf_estimation()))
+    results.append(("Tiled PSF", test_tiled_psf_estimation()))
     results.append(("Calibration Pattern", test_calibration_pattern()))
     results.append(("Cross-Channel", test_cross_channel_deconvolution()))
 
