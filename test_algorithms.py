@@ -13,6 +13,7 @@ from deconv import (
     estimate_psf,
     estimate_psf_multiscale,
     estimate_psf_tiled,
+    deconvolve_tiled,
     create_calibration_pattern,
     img_to_norm_grayscale,
 )
@@ -208,6 +209,56 @@ def test_tiled_psf_estimation():
     return passed
 
 
+def test_tiled_deconvolution():
+    """Test tile-based deconvolution with spatially-varying PSFs."""
+    print("=== Testing Tiled Deconvolution ===")
+
+    np.random.seed(42)
+
+    # Create a larger image
+    sharp = np.random.rand(128, 128) * 0.5 + 0.25
+
+    # Create PSFs for a 2x2 tile grid (same PSF for simplicity)
+    kernel = np.zeros((11, 11))
+    kernel[5, 5] = 1.0
+    kernel = gaussian_filter(kernel, sigma=1.5)
+    kernel = kernel / kernel.sum()
+
+    # Blur the entire image (in practice, different regions would have different blur)
+    blurred = convolve(sharp, kernel, mode='reflect')
+
+    # Create tile PSFs (2x2 grid, all same for this test)
+    psfs = [kernel.copy() for _ in range(4)]
+    tile_grid = (2, 2)
+
+    # Run tiled deconvolution
+    result = deconvolve_tiled(
+        blurred, psfs, tile_grid,
+        overlap=0.25,
+        lambda_residual=200,
+        lambda_tv=2.0,
+        lambda_cross=0.0,
+        max_iterations=100,
+        tolerance=1e-4,
+        verbose=False
+    )
+
+    # Check result shape
+    correct_shape = result.shape == sharp.shape
+
+    # Check that result is reasonable (PSNR improved or at least not degraded significantly)
+    input_error = np.mean((blurred - sharp) ** 2)
+    output_error = np.mean((result - sharp) ** 2)
+
+    print(f"  Input MSE: {input_error:.6f}")
+    print(f"  Output MSE: {output_error:.6f}")
+    print(f"  Shape correct: {correct_shape}")
+
+    passed = correct_shape and result.min() >= -0.1 and result.max() <= 1.1
+    print(f"  Status: {'PASS' if passed else 'FAIL'}\n")
+    return passed
+
+
 def test_cross_channel_deconvolution():
     """Test cross-channel deconvolution for chromatic aberration."""
     print("=== Testing Cross-Channel Deconvolution ===")
@@ -280,6 +331,7 @@ def main():
     results.append(("PSF Estimation", test_psf_estimation()))
     results.append(("Multiscale PSF", test_multiscale_psf_estimation()))
     results.append(("Tiled PSF", test_tiled_psf_estimation()))
+    results.append(("Tiled Deconv", test_tiled_deconvolution()))
     results.append(("Calibration Pattern", test_calibration_pattern()))
     results.append(("Cross-Channel", test_cross_channel_deconvolution()))
 

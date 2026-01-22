@@ -17,3 +17,4 @@ from .psf_estimation import (
     extract_patches_from_images,
     smooth_psf_spatially,
 )
+from .tiled_deconv import deconvolve_tiled, load_tiled_psfs

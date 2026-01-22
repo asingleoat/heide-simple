@@ -133,7 +133,7 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 ### Required Arguments
 
 - `input` - Input image file (JPEG, PNG, etc.)
-- `--kernel KERNEL` or `--gaussian SIGMA` - Specify the blur kernel
+- `--kernel KERNEL`, `--gaussian SIGMA`, or `--kernel-tiles PATH` - Specify the blur kernel(s)
 
 ### Options
 
@@ -141,6 +141,9 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 |--------|---------|-------------|
 | `-o, --output` | `input_deconv.ext` | Output file path |
 | `--kernel-size` | auto | Resize kernel to this size (must be odd) |
+| `--kernel-tiles` | - | Directory or base path for tiled PSFs |
+| `--tiles` | auto | Tile grid for tiled deconvolution (e.g., 3x3) |
+| `--tile-overlap` | 0.25 | Tile overlap fraction (0-0.5) |
 | `--channels` | `rgb` | Channels to process: `rgb`, `r`, `g`, `b`, `gray` |
 | `--lambda-res` | 200 | Data fidelity weight (lower = more regularization) |
 | `--lambda-tv` | 2.0 | Total variation weight (higher = smoother) |
@@ -160,6 +163,9 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 
 # Gaussian blur removal with verbose output
 ./dev python deconvolve.py blurry.png --gaussian 3.0 -v -o sharp.png
+
+# Deconvolve with spatially-varying PSFs (from tiled estimation)
+./dev python deconvolve.py photo.jpg --kernel-tiles ./psf --tiles 3x3 -o sharp.png
 
 # Process only the red channel with stronger regularization
 ./dev python deconvolve.py image.jpg --kernel psf.png --channels r --lambda-res 100

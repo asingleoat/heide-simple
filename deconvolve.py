@@ -21,7 +21,7 @@ import numpy as np
 import imageio.v3 as iio
 from scipy.ndimage import gaussian_filter
 
-from deconv import pd_joint_deconv, img_to_norm_grayscale
+from deconv import pd_joint_deconv, img_to_norm_grayscale, deconvolve_tiled, load_tiled_psfs
 
 
 def create_gaussian_kernel(sigma, size=None):
@@ -153,9 +153,13 @@ Examples:
   %(prog)s input.jpg --kernel psf.png --lambda-res 100 --lambda-tv 3.0
   %(prog)s blurry.png --kernel psf.png --channels r --verbose
 
+  # Deconvolve with spatially-varying PSFs (tiled)
+  %(prog)s blurry.png --kernel-tiles ./psf_tiles/ --tiles 3x3 -o sharp.png
+
 Kernel specification (one required):
-  --kernel     Load PSF from image file
-  --gaussian   Generate Gaussian PSF with given sigma
+  --kernel        Load PSF from image file
+  --gaussian      Generate Gaussian PSF with given sigma
+  --kernel-tiles  Directory or base path for tiled PSFs
         """
     )
 
@@ -170,10 +174,18 @@ Kernel specification (one required):
                               help='PSF/kernel image file')
     kernel_group.add_argument('--gaussian', type=float, metavar='SIGMA',
                               help='Gaussian blur sigma (generates kernel)')
+    kernel_group.add_argument('--kernel-tiles', type=Path,
+                              help='Directory or base path for tiled PSFs (e.g., psf_tile_*.png)')
 
     # Kernel size
     parser.add_argument('--kernel-size', type=int, default=None,
                         help='Resize kernel to this size (must be odd)')
+
+    # Tile options (for --kernel-tiles)
+    parser.add_argument('--tiles', type=str, default=None,
+                        help='Tile grid for spatially-varying deconvolution, e.g., 3x3')
+    parser.add_argument('--tile-overlap', type=float, default=0.25,
+                        help='Tile overlap fraction 0-0.5 (default: 0.25)')
 
     # Channel options
     parser.add_argument('--channels', type=str, default='rgb',
@@ -260,37 +272,80 @@ Kernel specification (one required):
             image = 0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] + 0.114 * image[:, :, 2]
         # 'rgb' keeps all channels
 
-    # Load or create kernel
-    if args.kernel:
+    # Handle tiled vs single-kernel deconvolution
+    if args.kernel_tiles:
+        # Tiled PSF deconvolution
         if args.verbose:
-            print(f"Loading kernel: {args.kernel}")
-        kernel = load_kernel(args.kernel, args.kernel_size)
+            print(f"Loading tiled PSFs: {args.kernel_tiles}")
+
+        # Parse tile grid if specified
+        tiles_h, tiles_w = None, None
+        if args.tiles:
+            try:
+                tiles_h, tiles_w = map(int, args.tiles.lower().split('x'))
+            except ValueError:
+                print(f"Error: Invalid tiles format '{args.tiles}'. Use format like '3x3'",
+                      file=sys.stderr)
+                sys.exit(1)
+
+        psfs, tile_grid = load_tiled_psfs(args.kernel_tiles, tiles_h, tiles_w)
+
+        if args.verbose:
+            print(f"Loaded {len(psfs)} tile PSFs ({tile_grid[1]}x{tile_grid[0]} grid)")
+            print(f"PSF size: {psfs[0].shape[0]} x {psfs[0].shape[1]}")
+
+        # Run tiled deconvolution
+        if args.verbose:
+            print(f"\nRunning tiled deconvolution...")
+            print(f"  lambda_residual: {args.lambda_res}")
+            print(f"  lambda_tv: {args.lambda_tv}")
+            print(f"  lambda_cross: {args.lambda_cross}")
+            print(f"  tile_overlap: {args.tile_overlap}")
+            print(f"  max_iterations: {args.max_iter}")
+            print()
+
+        result = deconvolve_tiled(
+            image, psfs, tile_grid,
+            overlap=args.tile_overlap,
+            lambda_residual=args.lambda_res,
+            lambda_tv=args.lambda_tv,
+            lambda_cross=args.lambda_cross,
+            max_iterations=args.max_iter,
+            tolerance=args.tolerance,
+            verbose=args.verbose
+        )
     else:
+        # Single kernel deconvolution
+        if args.kernel:
+            if args.verbose:
+                print(f"Loading kernel: {args.kernel}")
+            kernel = load_kernel(args.kernel, args.kernel_size)
+        else:
+            if args.verbose:
+                print(f"Creating Gaussian kernel (sigma={args.gaussian})")
+            kernel = create_gaussian_kernel(args.gaussian, args.kernel_size)
+
         if args.verbose:
-            print(f"Creating Gaussian kernel (sigma={args.gaussian})")
-        kernel = create_gaussian_kernel(args.gaussian, args.kernel_size)
+            print(f"Kernel size: {kernel.shape[0]} x {kernel.shape[1]}")
 
-    if args.verbose:
-        print(f"Kernel size: {kernel.shape[0]} x {kernel.shape[1]}")
+        # Run deconvolution
+        if args.verbose:
+            print(f"\nRunning deconvolution...")
+            print(f"  lambda_residual: {args.lambda_res}")
+            print(f"  lambda_tv: {args.lambda_tv}")
+            print(f"  lambda_cross: {args.lambda_cross}")
+            print(f"  max_iterations: {args.max_iter}")
+            print()
 
-    # Run deconvolution
-    if args.verbose:
-        print(f"\nRunning deconvolution...")
-        print(f"  lambda_residual: {args.lambda_res}")
-        print(f"  lambda_tv: {args.lambda_tv}")
-        print(f"  lambda_cross: {args.lambda_cross}")
-        print(f"  max_iterations: {args.max_iter}")
-        print()
-
-    result = deconvolve_image(
-        image, kernel,
-        lambda_residual=args.lambda_res,
-        lambda_tv=args.lambda_tv,
-        lambda_cross=args.lambda_cross,
-        max_iterations=args.max_iter,
-        tolerance=args.tolerance,
-        verbose=args.verbose
-    )
+        result = deconvolve_image(
+            image, kernel,
+            lambda_residual=args.lambda_res,
+            lambda_tv=args.lambda_tv,
+            lambda_cross=args.lambda_cross,
+            max_iterations=args.max_iter,
+            tolerance=args.tolerance,
+            verbose=args.verbose
+        )
 
     # Clip to valid range
     result = np.clip(result, 0, None)
