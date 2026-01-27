@@ -300,11 +300,18 @@ Kernel specification (one required):
                       file=sys.stderr)
                 sys.exit(1)
 
-        psfs, tile_grid = load_tiled_psfs(args.kernel_tiles, tiles_h, tiles_w)
+        psfs, tile_grid, is_per_channel = load_tiled_psfs(args.kernel_tiles, tiles_h, tiles_w)
 
         if args.verbose:
-            print(f"Loaded {len(psfs)} tile PSFs ({tile_grid[1]}x{tile_grid[0]} grid)")
-            print(f"PSF size: {psfs[0].shape[0]} x {psfs[0].shape[1]}")
+            if is_per_channel:
+                n_psfs = len(psfs['red'])
+                first_psf = psfs['red'][0]
+                print(f"Loaded {n_psfs} tile PSFs per channel ({tile_grid[1]}x{tile_grid[0]} grid)")
+            else:
+                n_psfs = len(psfs)
+                first_psf = psfs[0]
+                print(f"Loaded {n_psfs} tile PSFs ({tile_grid[1]}x{tile_grid[0]} grid)")
+            print(f"PSF size: {first_psf.shape[0]} x {first_psf.shape[1]}")
 
         # Run tiled deconvolution
         if args.verbose:

@@ -58,7 +58,7 @@ def _process_tile_worker(args):
     }
 
 
-def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None):
+def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None, per_channel=True):
     """
     Load tiled PSFs from files.
 
@@ -66,77 +66,168 @@ def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None):
     ----------
     pattern_or_dir : str or Path
         Either a directory containing PSF files named like 'psf_tile_0_0.png',
-        or a file pattern like 'psf_tile_{row}_{col}.png'
+        or a file pattern like 'psf_tile_{row}_{col}.png'. For per-channel PSFs,
+        expects files like 'psf_red_tile_0_0.png', 'psf_green_tile_0_0.png', etc.
     n_tiles_h : int, optional
         Number of tiles vertically. Auto-detected if not specified.
     n_tiles_w : int, optional
         Number of tiles horizontally. Auto-detected if not specified.
+    per_channel : bool
+        If True (default), try to load per-channel PSFs first, falling back to
+        grayscale. If False, only load grayscale PSFs.
 
     Returns
     -------
-    psfs : list of ndarray
-        List of PSFs in row-major order
+    psfs : list of ndarray or dict
+        If grayscale: List of PSFs in row-major order.
+        If per-channel: Dict with 'red', 'green', 'blue' keys, each containing
+        a list of PSFs in row-major order.
     tile_grid : tuple
         (n_tiles_h, n_tiles_w)
+    is_per_channel : bool
+        Whether per-channel PSFs were loaded.
     """
     import imageio.v3 as iio
 
     pattern_or_dir = Path(pattern_or_dir)
+    channel_names = ['red', 'green', 'blue']
 
+    # Determine base directory and name
     if pattern_or_dir.is_dir():
-        # Find all tile PSF files in directory
-        tile_files = list(pattern_or_dir.glob('*_tile_*_*.png'))
-        if not tile_files:
-            tile_files = list(pattern_or_dir.glob('*_tile_*_*.tif'))
-        if not tile_files:
-            raise ValueError(f"No tile PSF files found in {pattern_or_dir}")
+        base_dir = pattern_or_dir
+        base_name = None
     else:
-        # Treat as a base path pattern
         base_dir = pattern_or_dir.parent
         base_name = pattern_or_dir.stem
-        tile_files = list(base_dir.glob(f'{base_name}_tile_*_*.png'))
+
+    # Try to find per-channel PSFs first if requested
+    per_channel_tiles = {}
+    if per_channel:
+        for ch_name in channel_names:
+            if base_name:
+                pattern = f'{base_name}_{ch_name}_tile_*_*.png'
+            else:
+                pattern = f'*_{ch_name}_tile_*_*.png'
+
+            tile_files = list(base_dir.glob(pattern))
+            if not tile_files:
+                pattern_tif = pattern.replace('.png', '.tif')
+                tile_files = list(base_dir.glob(pattern_tif))
+
+            if tile_files:
+                per_channel_tiles[ch_name] = tile_files
+
+    # Check if we have per-channel PSFs for all channels
+    has_per_channel = len(per_channel_tiles) == 3
+
+    if has_per_channel:
+        # Load per-channel PSFs
+        result = {}
+        detected_h, detected_w = 0, 0
+
+        for ch_name in channel_names:
+            tile_pattern = re.compile(rf'_{ch_name}_tile_(\d+)_(\d+)\.')
+            tiles = {}
+            max_row, max_col = 0, 0
+
+            for f in per_channel_tiles[ch_name]:
+                match = tile_pattern.search(str(f))
+                if match:
+                    row, col = int(match.group(1)), int(match.group(2))
+                    tiles[(row, col)] = f
+                    max_row = max(max_row, row)
+                    max_col = max(max_col, col)
+
+            if not tiles:
+                raise ValueError(f"Could not parse tile coordinates from {ch_name} PSF filenames")
+
+            detected_h = max(detected_h, max_row + 1)
+            detected_w = max(detected_w, max_col + 1)
+
+            # Store for later loading
+            result[ch_name] = tiles
+
+        # Determine grid size
+        if n_tiles_h is None:
+            n_tiles_h = detected_h
+        if n_tiles_w is None:
+            n_tiles_w = detected_w
+
+        # Load PSFs for each channel
+        for ch_name in channel_names:
+            tiles = result[ch_name]
+            psfs = []
+            for row in range(n_tiles_h):
+                for col in range(n_tiles_w):
+                    if (row, col) not in tiles:
+                        raise ValueError(f"Missing {ch_name} tile PSF for position ({row}, {col})")
+
+                    psf = iio.imread(tiles[(row, col)])
+                    psf = img_to_norm_grayscale(psf)
+                    psf = np.maximum(psf, 0)
+                    psf = psf / (psf.sum() + 1e-10)
+                    psfs.append(psf)
+            result[ch_name] = psfs
+
+        return result, (n_tiles_h, n_tiles_w), True
+
+    else:
+        # Fall back to grayscale PSF loading
+        if base_name:
+            tile_files = list(base_dir.glob(f'{base_name}_tile_*_*.png'))
+            if not tile_files:
+                tile_files = list(base_dir.glob(f'{base_name}_tile_*_*.tif'))
+        else:
+            # Find files that are NOT per-channel (don't have _red_, _green_, _blue_ before _tile_)
+            all_files = list(base_dir.glob('*_tile_*_*.png'))
+            if not all_files:
+                all_files = list(base_dir.glob('*_tile_*_*.tif'))
+            # Filter out per-channel files
+            tile_files = [f for f in all_files
+                         if not any(f'_{ch}_tile_' in str(f) for ch in channel_names)]
+
         if not tile_files:
-            tile_files = list(base_dir.glob(f'{base_name}_tile_*_*.tif'))
+            raise ValueError(f"No tile PSF files found in {base_dir}")
 
-    # Parse tile coordinates from filenames
-    tile_pattern = re.compile(r'_tile_(\d+)_(\d+)\.')
-    tiles = {}
-    max_row, max_col = 0, 0
+        # Parse tile coordinates from filenames
+        tile_pattern = re.compile(r'_tile_(\d+)_(\d+)\.')
+        tiles = {}
+        max_row, max_col = 0, 0
 
-    for f in tile_files:
-        match = tile_pattern.search(str(f))
-        if match:
-            row, col = int(match.group(1)), int(match.group(2))
-            tiles[(row, col)] = f
-            max_row = max(max_row, row)
-            max_col = max(max_col, col)
+        for f in tile_files:
+            match = tile_pattern.search(str(f))
+            if match:
+                row, col = int(match.group(1)), int(match.group(2))
+                tiles[(row, col)] = f
+                max_row = max(max_row, row)
+                max_col = max(max_col, col)
 
-    if not tiles:
-        raise ValueError(f"Could not parse tile coordinates from filenames")
+        if not tiles:
+            raise ValueError(f"Could not parse tile coordinates from filenames")
 
-    # Determine grid size
-    detected_h = max_row + 1
-    detected_w = max_col + 1
+        # Determine grid size
+        detected_h = max_row + 1
+        detected_w = max_col + 1
 
-    if n_tiles_h is None:
-        n_tiles_h = detected_h
-    if n_tiles_w is None:
-        n_tiles_w = detected_w
+        if n_tiles_h is None:
+            n_tiles_h = detected_h
+        if n_tiles_w is None:
+            n_tiles_w = detected_w
 
-    # Load PSFs in row-major order
-    psfs = []
-    for row in range(n_tiles_h):
-        for col in range(n_tiles_w):
-            if (row, col) not in tiles:
-                raise ValueError(f"Missing tile PSF for position ({row}, {col})")
+        # Load PSFs in row-major order
+        psfs = []
+        for row in range(n_tiles_h):
+            for col in range(n_tiles_w):
+                if (row, col) not in tiles:
+                    raise ValueError(f"Missing tile PSF for position ({row}, {col})")
 
-            psf = iio.imread(tiles[(row, col)])
-            psf = img_to_norm_grayscale(psf)
-            psf = np.maximum(psf, 0)
-            psf = psf / (psf.sum() + 1e-10)
-            psfs.append(psf)
+                psf = iio.imread(tiles[(row, col)])
+                psf = img_to_norm_grayscale(psf)
+                psf = np.maximum(psf, 0)
+                psf = psf / (psf.sum() + 1e-10)
+                psfs.append(psf)
 
-    return psfs, (n_tiles_h, n_tiles_w)
+        return psfs, (n_tiles_h, n_tiles_w), False
 
 
 def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
@@ -153,8 +244,10 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     ----------
     image : ndarray
         Input image (H, W) for grayscale or (H, W, C) for color
-    psfs : list of ndarray
-        List of PSFs in row-major order, one per tile
+    psfs : list of ndarray or dict
+        If list: PSFs in row-major order, one per tile (same PSF for all channels).
+        If dict: Keys are 'red', 'green', 'blue' and values are lists of PSFs
+        in row-major order (per-channel PSFs).
     tile_grid : tuple
         (n_tiles_h, n_tiles_w) specifying the tile grid dimensions
     overlap : float
@@ -184,9 +277,23 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     n_tiles_h, n_tiles_w = tile_grid
     n_tiles = n_tiles_h * n_tiles_w
 
-    if len(psfs) != n_tiles:
-        raise ValueError(f"Number of PSFs ({len(psfs)}) must match "
-                        f"tile grid ({n_tiles_h}x{n_tiles_w}={n_tiles})")
+    # Determine if we have per-channel PSFs
+    is_per_channel = isinstance(psfs, dict)
+
+    if is_per_channel:
+        # Validate per-channel PSFs
+        channel_names = ['red', 'green', 'blue']
+        for ch_name in channel_names:
+            if ch_name not in psfs:
+                raise ValueError(f"Missing '{ch_name}' key in per-channel PSFs dict")
+            if len(psfs[ch_name]) != n_tiles:
+                raise ValueError(f"Number of {ch_name} PSFs ({len(psfs[ch_name])}) must match "
+                                f"tile grid ({n_tiles_h}x{n_tiles_w}={n_tiles})")
+    else:
+        # Validate grayscale PSFs
+        if len(psfs) != n_tiles:
+            raise ValueError(f"Number of PSFs ({len(psfs)}) must match "
+                            f"tile grid ({n_tiles_h}x{n_tiles_w}={n_tiles})")
 
     # Handle grayscale vs color
     if image.ndim == 2:
@@ -210,6 +317,7 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
         print(f"  Image: {w}x{h}, {n_channels} channel(s)")
         print(f"  Tiles: {n_tiles_w}x{n_tiles_h}")
         print(f"  Tile size: ~{base_tile_w}x{base_tile_h} (with {int(overlap*100)}% overlap)")
+        print(f"  PSFs: {'per-channel' if is_per_channel else 'grayscale'}")
         if use_parallel:
             print(f"  Workers: {n_workers} (parallel)")
         else:
@@ -221,10 +329,22 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
 
     # Prepare tile arguments
     tile_args = []
+    channel_names = ['red', 'green', 'blue']
     for tile_idx in range(n_tiles):
         tile_row = tile_idx // n_tiles_w
         tile_col = tile_idx % n_tiles_w
-        psf = psfs[tile_idx]
+
+        # Get PSF(s) for this tile
+        if is_per_channel:
+            # Build list of PSFs for each channel
+            tile_psfs = [psfs[channel_names[ch]][tile_idx]
+                        for ch in range(min(n_channels, 3))]
+            # If more than 3 channels, use the last PSF for remaining
+            while len(tile_psfs) < n_channels:
+                tile_psfs.append(tile_psfs[-1])
+            psf = tile_psfs
+        else:
+            psf = psfs[tile_idx]
 
         # Calculate tile boundaries with overlap
         y_start = max(0, tile_row * base_tile_h - overlap_h)
@@ -311,15 +431,30 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     return output
 
 
-def _deconvolve_single(image, kernel, n_channels, lambda_residual, lambda_tv,
+def _deconvolve_single(image, kernels, n_channels, lambda_residual, lambda_tv,
                        lambda_cross, max_iterations, tolerance, verbose):
-    """Deconvolve a single tile."""
+    """Deconvolve a single tile.
+
+    Parameters
+    ----------
+    image : ndarray
+        Tile image (H, W, C)
+    kernels : ndarray or list of ndarray
+        Either a single kernel (used for all channels) or a list of kernels
+        (one per channel).
+    """
+    # Handle single kernel vs per-channel kernels
+    if isinstance(kernels, np.ndarray) and kernels.ndim == 2:
+        kernels = [kernels] * n_channels
+    elif len(kernels) != n_channels:
+        raise ValueError(f"Number of kernels ({len(kernels)}) must match channels ({n_channels})")
+
     # Prepare channel data
     channels = []
     for ch in range(n_channels):
         channels.append({
             'image': image[:, :, ch],
-            'kernel': kernel
+            'kernel': kernels[ch]
         })
 
     # Build lambda parameters

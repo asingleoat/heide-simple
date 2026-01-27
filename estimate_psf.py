@@ -56,8 +56,8 @@ Examples:
   %(prog)s --sharp-pattern sharp_photo.png --blurred-pattern blurred_photo.png \\
            --size 43 --grid 4x4 -o psf.png
 
-  # Estimate per-channel PSFs for chromatic aberration
-  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --per-channel -o psf
+  # Estimate single grayscale PSF instead of per-channel
+  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --grayscale -o psf.png
 
   # Estimate spatially-varying PSF (3x3 tile grid)
   %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --tiles 3x3 -o psf
@@ -94,8 +94,8 @@ Examples:
                         help='Maximum iterations (default: 500)')
     parser.add_argument('--tolerance', type=float, default=1e-5,
                         help='Convergence tolerance (default: 1e-5)')
-    parser.add_argument('--per-channel', action='store_true',
-                        help='Estimate separate PSF for each color channel')
+    parser.add_argument('--grayscale', action='store_true',
+                        help='Estimate single grayscale PSF (default: per-channel for color images)')
     parser.add_argument('--multiscale', action='store_true',
                         help='Use scale-space estimation for faster convergence')
     parser.add_argument('--n-scales', type=int, default=None,
@@ -209,53 +209,96 @@ Examples:
 
         # Handle tile-based estimation for spatially-varying PSF
         if tiles_h is not None and tiles_w is not None:
-            if args.per_channel and sharp.ndim == 3:
-                print("Error: --per-channel and --tiles cannot be used together yet",
-                      file=sys.stderr)
-                sys.exit(1)
-
-            sharp_gray = img_to_norm_grayscale(sharp)
-            blurred_gray = img_to_norm_grayscale(blurred)
-
-            if args.verbose:
-                print(f"\nEstimating spatially-varying PSF...")
-                print(f"  Tiles: {tiles_w}x{tiles_h}")
-                print(f"  PSF size: {args.size}x{args.size}")
-
-            psfs, tile_centers, tile_grid = estimate_psf_tiled(
-                sharp_gray, blurred_gray, args.size,
-                n_tiles_h=tiles_h, n_tiles_w=tiles_w,
-                overlap=args.tile_overlap,
-                lambda_tv=args.lambda_tv,
-                mu_sum=args.mu_sum,
-                max_it=args.max_iter,
-                tol=args.tolerance,
-                multiscale=args.multiscale,
-                n_scales=args.n_scales,
-                smooth_sigma=args.smooth_sigma,
-                verbose=verbose
-            )
-
-            # Save individual tile PSFs
             output_base = args.output.stem
             output_ext = args.output.suffix or '.png'
-            for idx, ((row, col), psf) in enumerate(zip(
-                    [(i, j) for i in range(tiles_h) for j in range(tiles_w)], psfs)):
-                out_path = args.output.parent / f"{output_base}_tile_{row}_{col}{output_ext}"
-                _save_psf(psf, out_path, args.bit16)
+
+            # Per-channel tiled estimation (default for color images)
+            if not args.grayscale and sharp.ndim == 3 and sharp.shape[2] >= 3:
+                channel_names = ['red', 'green', 'blue']
+                all_channel_psfs = {}
+
+                for ch in range(min(3, sharp.shape[2])):
+                    if args.verbose:
+                        print(f"\nEstimating spatially-varying PSF for {channel_names[ch]} channel...")
+                        print(f"  Tiles: {tiles_w}x{tiles_h}")
+                        print(f"  PSF size: {args.size}x{args.size}")
+
+                    sharp_ch = img_to_norm_grayscale(sharp[:, :, ch])
+                    blurred_ch = img_to_norm_grayscale(blurred[:, :, ch])
+
+                    psfs, tile_centers, tile_grid = estimate_psf_tiled(
+                        sharp_ch, blurred_ch, args.size,
+                        n_tiles_h=tiles_h, n_tiles_w=tiles_w,
+                        overlap=args.tile_overlap,
+                        lambda_tv=args.lambda_tv,
+                        mu_sum=args.mu_sum,
+                        max_it=args.max_iter,
+                        tol=args.tolerance,
+                        multiscale=args.multiscale,
+                        n_scales=args.n_scales,
+                        smooth_sigma=args.smooth_sigma,
+                        verbose=verbose
+                    )
+
+                    all_channel_psfs[channel_names[ch]] = psfs
+
+                    # Save individual tile PSFs for this channel
+                    for idx, (row, col) in enumerate([(i, j) for i in range(tiles_h) for j in range(tiles_w)]):
+                        out_path = args.output.parent / f"{output_base}_{channel_names[ch]}_tile_{row}_{col}{output_ext}"
+                        _save_psf(psfs[idx], out_path, args.bit16)
+                        if args.verbose:
+                            print(f"PSF ({channel_names[ch]} tile {row},{col}) saved to: {out_path}")
+
+                    # Save combined grid for this channel
+                    grid_path = args.output.parent / f"{output_base}_{channel_names[ch]}{output_ext}"
+                    _save_psf_grid(psfs, tiles_h, tiles_w, grid_path, args.bit16)
+
+                print(f"\nSaved {tiles_h * tiles_w * 3} tile PSFs:")
+                for ch_name in channel_names:
+                    print(f"  {ch_name}: {output_base}_{ch_name}_tile_*{output_ext}")
+                print(f"Combined grids: {output_base}_red{output_ext}, {output_base}_green{output_ext}, {output_base}_blue{output_ext}")
+
+            else:
+                # Grayscale tiled estimation
+                sharp_gray = img_to_norm_grayscale(sharp)
+                blurred_gray = img_to_norm_grayscale(blurred)
+
                 if args.verbose:
-                    print(f"PSF (tile {row},{col}) saved to: {out_path}")
+                    print(f"\nEstimating spatially-varying PSF (grayscale)...")
+                    print(f"  Tiles: {tiles_w}x{tiles_h}")
+                    print(f"  PSF size: {args.size}x{args.size}")
 
-            print(f"\nSaved {len(psfs)} tile PSFs to: {args.output.parent}/{output_base}_tile_*{output_ext}")
+                psfs, tile_centers, tile_grid = estimate_psf_tiled(
+                    sharp_gray, blurred_gray, args.size,
+                    n_tiles_h=tiles_h, n_tiles_w=tiles_w,
+                    overlap=args.tile_overlap,
+                    lambda_tv=args.lambda_tv,
+                    mu_sum=args.mu_sum,
+                    max_it=args.max_iter,
+                    tol=args.tolerance,
+                    multiscale=args.multiscale,
+                    n_scales=args.n_scales,
+                    smooth_sigma=args.smooth_sigma,
+                    verbose=verbose
+                )
 
-            # Also save a combined visualization
-            _save_psf_grid(psfs, tiles_h, tiles_w, args.output, args.bit16)
-            print(f"Combined PSF grid saved to: {args.output}")
+                # Save individual tile PSFs
+                for idx, (row, col) in enumerate([(i, j) for i in range(tiles_h) for j in range(tiles_w)]):
+                    out_path = args.output.parent / f"{output_base}_tile_{row}_{col}{output_ext}"
+                    _save_psf(psfs[idx], out_path, args.bit16)
+                    if args.verbose:
+                        print(f"PSF (tile {row},{col}) saved to: {out_path}")
+
+                print(f"\nSaved {len(psfs)} tile PSFs to: {args.output.parent}/{output_base}_tile_*{output_ext}")
+
+                # Also save a combined visualization
+                _save_psf_grid(psfs, tiles_h, tiles_w, args.output, args.bit16)
+                print(f"Combined PSF grid saved to: {args.output}")
 
             return
 
-        # Handle per-channel estimation
-        if args.per_channel and sharp.ndim == 3:
+        # Handle per-channel estimation (default for color images)
+        if not args.grayscale and sharp.ndim == 3 and sharp.shape[2] >= 3:
             psfs = []
             channel_names = ['red', 'green', 'blue']
             for ch in range(min(3, sharp.shape[2])):
@@ -357,8 +400,8 @@ Examples:
             seed=args.seed
         )
 
-        # Handle per-channel estimation
-        if args.per_channel and sharp.ndim == 3:
+        # Handle per-channel estimation (default for color images)
+        if not args.grayscale and sharp.ndim == 3 and sharp.shape[2] >= 3:
             channel_names = ['red', 'green', 'blue']
             for ch in range(min(3, sharp.shape[2])):
                 if args.verbose:

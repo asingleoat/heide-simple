@@ -71,14 +71,21 @@ If you don't have a known PSF for your lens, you can estimate it using calibrati
        --size 43 --grid 4x4 -o psf.png
    ```
 
-### Per-Channel PSF Estimation
+### Per-Channel PSF Estimation (Default)
 
-For lenses with chromatic aberration, estimate separate PSFs for each color channel:
+For color images, per-channel PSF estimation is enabled by default. This accounts for chromatic aberration where each color channel has a different blur:
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 31 --per-channel -o psf
+    --size 31 -o psf
 # Creates: psf_red.png, psf_green.png, psf_blue.png
+```
+
+To estimate a single grayscale PSF instead:
+
+```bash
+./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
+    --size 31 --grayscale -o psf.png
 ```
 
 ### Multiscale PSF Estimation
@@ -96,8 +103,13 @@ For lenses with spatially-varying blur (e.g., wide-angle lenses with field curva
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 31 --tiles 3x3 -o psf.png
-# Creates: psf_tile_0_0.png, psf_tile_0_1.png, ..., psf_tile_2_2.png, and psf.png (combined grid)
+    --size 31 --tiles 3x3 -o psf
+# For color images (default):
+# Creates: psf_red_tile_0_0.png, psf_green_tile_0_0.png, psf_blue_tile_0_0.png, ...
+# Plus combined grids: psf_red.png, psf_green.png, psf_blue.png
+
+# For grayscale (--grayscale flag):
+# Creates: psf_tile_0_0.png, psf_tile_0_1.png, ..., and psf.png (combined grid)
 ```
 
 ### PSF Estimation Options
@@ -108,7 +120,7 @@ For lenses with spatially-varying blur (e.g., wide-angle lenses with field curva
 | `--lambda-tv` | 0.001 | TV regularization on PSF |
 | `--mu-sum` | 50.0 | Sum-to-one constraint weight |
 | `--max-iter` | 500 | Maximum iterations |
-| `--per-channel` | off | Estimate separate PSF per color channel |
+| `--grayscale` | off | Estimate single grayscale PSF (default: per-channel for color) |
 | `--multiscale` | off | Use scale-space estimation (faster for large PSFs) |
 | `--n-scales` | auto | Number of scales for multiscale |
 | `--tiles` | off | Tile grid for spatially-varying PSF (e.g., 3x3) |
@@ -166,6 +178,7 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 ./dev python deconvolve.py blurry.png --gaussian 3.0 -v -o sharp.png
 
 # Deconvolve with spatially-varying PSFs (from tiled estimation)
+# Automatically detects and uses per-channel PSFs if present
 ./dev python deconvolve.py photo.jpg --kernel-tiles ./psf --tiles 3x3 -o sharp.png
 
 # Parallel tiled deconvolution (use all CPUs)
