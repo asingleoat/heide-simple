@@ -34,7 +34,7 @@ Example:
 
     # --- Sensible Defaults ---
     psf_size = 31
-    tiles = '9x12'
+    tiles = '3x4'
     # The `estimate_psf.py` script does not have a multi-threading option itself.
     # The `--workers` option is available in `deconvolve.py`.
     # We will use --multiscale for faster convergence on large PSFs as requested.
