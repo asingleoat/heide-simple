@@ -22,7 +22,6 @@ import numpy as np
 from scipy.fft import fft2, ifft2
 from scipy.ndimage import zoom
 
-from .utils import psf2otf
 from .operator_norm import compute_operator_norm
 
 
@@ -646,7 +645,7 @@ def estimate_psf_tiled(sharp_image, blurred_image, psf_size, n_tiles_h=3, n_tile
     overlap_w = int(base_tile_w * overlap)
 
     if verbose in ('brief', 'all'):
-        print(f"Tile-based PSF estimation")
+        print("Tile-based PSF estimation")
         print(f"  Image size: {w}x{h}")
         print(f"  Tiles: {n_tiles_w}x{n_tiles_h}")
         print(f"  Tile size: ~{base_tile_w}x{base_tile_h} (with {int(overlap*100)}% overlap)")

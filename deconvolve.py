@@ -182,14 +182,18 @@ Kernel specification (one required):
     parser.add_argument('--kernel-size', type=int, default=None,
                         help='Resize kernel to this size (must be odd)')
 
-    # Tile options (for --kernel-tiles)
-    parser.add_argument('--tiles', type=str, default=None,
-                        help='Tile grid for spatially-varying deconvolution, e.g., 3x3')
-    parser.add_argument('--tile-overlap', type=float, default=0.25,
-                        help='Tile overlap fraction 0-0.5 (default: 0.25)')
-    parser.add_argument('--workers', type=int, default=1,
-                        help='Number of parallel workers for tiled deconvolution. '
-                             '0=auto (all CPUs), 1=sequential (default: 1)')
+    # Tile options
+    tile_group = parser.add_argument_group(
+        'Tiled Deconvolution',
+        'Options for spatially-varying deconvolution with tiled PSFs.'
+    )
+    tile_group.add_argument('--tiles', type=str, default=None,
+                           help='Tile grid for spatially-varying deconvolution, e.g., 3x3')
+    tile_group.add_argument('--tile-overlap', type=float, default=0.25,
+                           help='Tile overlap fraction 0-0.5 (default: 0.25)')
+    tile_group.add_argument('--workers', type=int, default=1,
+                           help='Number of parallel workers for tiled deconvolution. '
+                                '0=auto (all CPUs), 1=sequential (default: 1)')
 
     # Channel options
     parser.add_argument('--channels', type=str, default='rgb',
@@ -197,11 +201,11 @@ Kernel specification (one required):
                         help='Channels to process (default: rgb)')
 
     # Algorithm parameters
-    parser.add_argument('--lambda-res', type=float, default=200,
+    parser.add_argument('--res', '--lambda-res', type=float, dest='lambda_res', default=200,
                         help='Data fidelity weight (default: 200)')
-    parser.add_argument('--lambda-tv', type=float, default=2.0,
+    parser.add_argument('--tv', '--lambda-tv', type=float, dest='lambda_tv', default=2.0,
                         help='Total variation weight (default: 2.0)')
-    parser.add_argument('--lambda-cross', type=float, default=3.0,
+    parser.add_argument('--cross', '--lambda-cross', type=float, dest='lambda_cross', default=3.0,
                         help='Cross-channel coupling weight (default: 3.0)')
     parser.add_argument('--max-iter', type=int, default=200,
                         help='Maximum iterations (default: 200)')
@@ -315,7 +319,7 @@ Kernel specification (one required):
 
         # Run tiled deconvolution
         if args.verbose:
-            print(f"\nRunning tiled deconvolution...")
+            print("\nRunning tiled deconvolution...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
             print(f"  lambda_cross: {args.lambda_cross}")
@@ -350,7 +354,7 @@ Kernel specification (one required):
 
         # Run deconvolution
         if args.verbose:
-            print(f"\nRunning deconvolution...")
+            print("\nRunning deconvolution...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
             print(f"  lambda_cross: {args.lambda_cross}")

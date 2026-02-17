@@ -24,6 +24,11 @@ Required Python packages (if not using Nix):
 - scikit-image
 - imageio
 
+To install these, you can use pip:
+```bash
+pip install -r requirements.txt
+```
+
 ## Quick Start
 
 Deconvolve an image with a known PSF:
@@ -115,20 +120,29 @@ For lenses with spatially-varying blur (e.g., wide-angle lenses with field curva
 ### PSF Estimation Options
 
 | Option | Default | Description |
-|--------|---------|-------------|
+|---|---|---|
 | `--size` | 31 | PSF size in pixels (must be odd) |
-| `--lambda-tv` | 0.001 | TV regularization on PSF |
-| `--mu-sum` | 50.0 | Sum-to-one constraint weight |
+| **Basic Parameters** | | |
+| `--tv`, `--lambda-tv` | 0.001 | TV regularization on PSF |
+| `--mu`, `--mu-sum` | 50.0 | Sum-to-one constraint weight |
 | `--max-iter` | 500 | Maximum iterations |
+| `--tolerance` | 1e-5 | Convergence tolerance |
 | `--grayscale` | off | Estimate single grayscale PSF (default: per-channel for color) |
 | `--multiscale` | off | Use scale-space estimation (faster for large PSFs) |
 | `--n-scales` | auto | Number of scales for multiscale |
+| **Spatially-Varying PSF Estimation (Tiled)** | | |
 | `--tiles` | off | Tile grid for spatially-varying PSF (e.g., 3x3) |
 | `--tile-overlap` | 0.25 | Tile overlap fraction (0-0.5) |
 | `--smooth-sigma` | 1.0 | Spatial smoothing between tile PSFs |
-| `--patch-size` | 128 | Noise patch size in calibration pattern |
+| **Calibration Pattern Generation & Patch Extraction** | | |
+| `--patch-size` | 128 | Size of noise patches in calibration pattern |
 | `--grid` | 4x4 | Grid of patches in calibration pattern |
 | `--border` | 20 | Border width (should be ≥ expected blur radius) |
+| `--seed` | 42 | Random seed for pattern generation |
+| `--crop-border` | 5 | Extra border to crop from patches |
+| **Other Options** | | |
+| `-v`, `--verbose` | off | Print progress information |
+| `--16bit` | off | Save PSF as 16-bit image |
 
 ## Command-Line Usage (Deconvolution)
 
@@ -150,22 +164,25 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 ### Options
 
 | Option | Default | Description |
-|--------|---------|-------------|
+|---|---|---|
 | `-o, --output` | `input_deconv.ext` | Output file path |
 | `--kernel-size` | auto | Resize kernel to this size (must be odd) |
+| **Tiled Deconvolution** | | |
 | `--kernel-tiles` | - | Directory or base path for tiled PSFs |
 | `--tiles` | auto | Tile grid for tiled deconvolution (e.g., 3x3) |
 | `--tile-overlap` | 0.25 | Tile overlap fraction (0-0.5) |
 | `--workers` | 1 | Parallel workers for tiled deconvolution (0=auto) |
+| **Algorithm Parameters** | | |
 | `--channels` | `rgb` | Channels to process: `rgb`, `r`, `g`, `b`, `gray` |
-| `--lambda-res` | 200 | Data fidelity weight (lower = more regularization) |
-| `--lambda-tv` | 2.0 | Total variation weight (higher = smoother) |
-| `--lambda-cross` | 3.0 | Cross-channel coupling weight |
+| `--res`, `--lambda-res` | 200 | Data fidelity weight (lower = more regularization) |
+| `--tv`, `--lambda-tv` | 2.0 | Total variation weight (higher = smoother) |
+| `--cross`, `--lambda-cross` | 3.0 | Cross-channel coupling weight |
 | `--max-iter` | 200 | Maximum iterations per channel |
 | `--tolerance` | 1e-4 | Convergence tolerance |
+| **Other Options** | | |
 | `--linear` | off | Input is already linear (skip gamma decoding) |
 | `--gamma` | 2.2 | Gamma value for encoding/decoding |
-| `-v, --verbose` | off | Print progress information |
+| `-v`, `--verbose` | off | Print progress information |
 | `--16bit` | off | Save as 16-bit image |
 
 ### Examples
@@ -185,13 +202,13 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 ./dev python deconvolve.py photo.jpg --kernel-tiles ./psf --tiles 3x3 --workers 0 -o sharp.png
 
 # Process only the red channel with stronger regularization
-./dev python deconvolve.py image.jpg --kernel psf.png --channels r --lambda-res 100
+./dev python deconvolve.py image.jpg --kernel psf.png --channels r --res 100
 
 # High-quality 16-bit output
 ./dev python deconvolve.py raw_photo.png --kernel psf.png --16bit --linear
 
 # Adjust regularization for challenging images
-./dev python deconvolve.py noisy.jpg --kernel psf.png --lambda-tv 5.0 --lambda-res 100
+./dev python deconvolve.py noisy.jpg --kernel psf.png --tv 5.0 --res 100
 ```
 
 ## Python API
@@ -213,11 +230,11 @@ channels = [
     {'image': image[:, :, 2], 'kernel': kernel},
 ]
 
-# Lambda parameters: [ch_idx, lambda_res, lambda_tv, lambda_black, lambda_cross..., n_detail]
+# Lambda parameters: [ch_idx, lambda_residual, lambda_tv, lambda_cross_ch..., n_detail]
 lambda_params = np.array([
-    [1, 200, 2.0, 0.0, 0.0, 0.0, 0.0, 1],
-    [2, 200, 2.0, 0.0, 3.0, 0.0, 0.0, 0],
-    [3, 200, 2.0, 0.0, 3.0, 0.0, 0.0, 0],
+    [1, 200, 2.0, 0.0, 0.0, 0.0, 1],
+    [2, 200, 2.0, 3.0, 0.0, 0.0, 0],
+    [3, 200, 2.0, 3.0, 0.0, 0.0, 0],
 ])
 
 # Run deconvolution
@@ -242,11 +259,11 @@ sharp = ...   # Sharp reference image (pinhole aperture)
 blurred = ... # Blurred image (wide aperture)
 
 psf = estimate_psf(sharp, blurred, psf_size=31,
-                   lambda_tv=0.001, mu_sum=50.0)
+                   tv=0.001, mu=50.0)
 
 # Option 2: Multiscale estimation (faster for large PSFs)
 psf = estimate_psf_multiscale(sharp, blurred, psf_size=63,
-                              lambda_tv=0.001, mu_sum=50.0)
+                              tv=0.001, mu=50.0)
 
 # Option 3: Tile-based estimation for spatially-varying blur
 psfs, tile_centers, tile_grid = estimate_psf_tiled(
@@ -293,11 +310,11 @@ If you see artifacts in the output:
 
 | Artifact | Solution |
 |----------|----------|
-| Horizontal/vertical banding | Decrease `--lambda-res` (try 100-150) |
-| Too blurry result | Increase `--lambda-res` (try 300-500) |
-| Noisy/grainy result | Increase `--lambda-tv` (try 3.0-5.0) |
-| Over-smoothed details | Decrease `--lambda-tv` (try 0.5-1.0) |
-| Color fringing | Increase `--lambda-cross` (try 5.0-10.0) |
+| Horizontal/vertical banding | Decrease `--res` (try 100-150) |
+| Too blurry result | Increase `--res` (try 300-500) |
+| Noisy/grainy result | Increase `--tv` (try 3.0-5.0) |
+| Over-smoothed details | Decrease `--tv` (try 0.5-1.0) |
+| Color fringing | Increase `--cross` (try 5.0-10.0) |
 
 ## Running the Demo
 

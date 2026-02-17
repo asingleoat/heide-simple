@@ -12,7 +12,7 @@ from scipy.fft import fft2, ifft2
 
 from .utils import psf2otf, edgetaper, imconv
 from .operator_norm import compute_operator_norm
-from .tracing import trace, tracer
+from .tracing import trace
 
 
 def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brief'):
@@ -67,11 +67,10 @@ def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brie
         ch_opt = int(row[0]) - 1  # Convert to 0-based index
         w_res = row[1]
         w_tv = row[2]
-        w_black = row[3]
 
         # Cross-channel weights (variable length)
         n_cross = n_channels
-        w_cross = row[4:4 + n_cross]
+        w_cross = row[3:3 + n_cross]
         res_iter = int(row[-1])
 
         # Validate
@@ -115,7 +114,7 @@ def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brie
         with trace("residual_pd_deconv"):
             result = _residual_pd_deconv(
                 channels_padded, db_chs_padded, ch_opt,
-                w_res, w_tv, w_black, w_cross,
+                w_res, w_tv, w_cross,
                 res_iter, tol, max_it, verbose
             )
 
@@ -129,7 +128,7 @@ def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brie
     return db_chs
 
 
-def _residual_pd_deconv(channels, db_chs, ch, w_res, w_tv, w_black, w_cross,
+def _residual_pd_deconv(channels, db_chs, ch, w_res, w_tv, w_cross,
                         res_iter, tol, max_it, verbose):
     """
     Residual deconvolution with optional detail layers.
@@ -166,7 +165,7 @@ def _residual_pd_deconv(channels, db_chs, ch, w_res, w_tv, w_black, w_cross,
         # Run primal-dual optimization
         x = _pd_channel_deconv(
             channels_res, ch, x_0, db_chs,
-            w_res, w_cross, w_tv, w_black,
+            w_res, w_cross, w_tv,
             max_it, detail_tol, tol_offset, verbose
         )
 
@@ -184,7 +183,7 @@ def _residual_pd_deconv(channels, db_chs, ch, w_res, w_tv, w_black, w_cross,
 
 
 def _pd_channel_deconv(channels, ch, x_0, db_chs,
-                       lambda_residual, lambda_cross_ch, lambda_tv, lambda_black,
+                       lambda_residual, lambda_cross_ch, lambda_tv,
                        max_it, tol, tol_offset, verbose):
     """
     Primal-dual deconvolution for a single channel.

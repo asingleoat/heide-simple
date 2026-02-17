@@ -44,19 +44,19 @@ def main():
     # Load image
     image_path = base_dir / 'images' / 'houses_big.jpg'
     print(f"Loading image: {image_path}")
-    I = iio.imread(image_path)
-    I = resize(I, (int(I.shape[0] * 0.15), int(I.shape[1] * 0.15)), anti_aliasing=True)
-    I = I.astype(np.float64)
-    I = I / I.max()
+    image = iio.imread(image_path)
+    image = resize(image, (int(image.shape[0] * 0.15), int(image.shape[1] * 0.15)), anti_aliasing=True)
+    image = image.astype(np.float64)
+    image = image / image.max()
 
-    print(f"Processing image with size {I.shape[1]} x {I.shape[0]}")
+    print(f"Processing image with size {image.shape[1]} x {image.shape[0]}")
 
     # Apply inverse gamma (linearize)
-    I = I ** 2.0
+    image = image ** 2.0
 
     # Store sharp reference
-    I_sharp = I.copy()
-    n_channels = I.shape[2]
+    I_sharp = image.copy()
+    n_channels = image.shape[2]
 
     # Create blur kernels (different sizes per channel to simulate chromatic aberration)
     blur_size = 15
@@ -79,7 +79,7 @@ def main():
     # Apply blur and noise to create synthetic test data
     noise_sd = 0.005
     kernel_var = 0.0000001
-    I_blurred = np.zeros_like(I)
+    I_blurred = np.zeros_like(image)
     K_blur_noisy = []
 
     for ch in range(n_channels):
@@ -120,7 +120,7 @@ def main():
     result = pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brief')
 
     # Gather results
-    I_deconv = np.zeros_like(I)
+    I_deconv = np.zeros_like(image)
     for ch in range(n_channels):
         I_deconv[:, :, ch] = result[ch]['image']
 

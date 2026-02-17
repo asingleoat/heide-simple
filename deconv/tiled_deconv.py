@@ -203,7 +203,7 @@ def load_tiled_psfs(pattern_or_dir, n_tiles_h=None, n_tiles_w=None, per_channel=
                 max_col = max(max_col, col)
 
         if not tiles:
-            raise ValueError(f"Could not parse tile coordinates from filenames")
+            raise ValueError("Could not parse tile coordinates from filenames")
 
         # Determine grid size
         detected_h = max_row + 1
@@ -313,7 +313,7 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     use_parallel = n_workers > 1 and n_tiles > 1
 
     if verbose:
-        print(f"Tile-based deconvolution")
+        print("Tile-based deconvolution")
         print(f"  Image: {w}x{h}, {n_channels} channel(s)")
         print(f"  Tiles: {n_tiles_w}x{n_tiles_h}")
         print(f"  Tile size: ~{base_tile_w}x{base_tile_h} (with {int(overlap*100)}% overlap)")
@@ -321,7 +321,7 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
         if use_parallel:
             print(f"  Workers: {n_workers} (parallel)")
         else:
-            print(f"  Workers: 1 (sequential)")
+            print("  Workers: 1 (sequential)")
 
     # Output accumulator and weight accumulator for blending
     output = np.zeros_like(image)
