@@ -14,6 +14,20 @@ from .utils import psf2otf, edgetaper, imconv
 from .operator_norm import compute_operator_norm
 from .tracing import trace
 
+# Derivative filter kernels (module-level constants to avoid repeated allocation)
+_DXF = np.array([[-1, 1]], dtype=np.float64)
+_DYF = np.array([[-1], [1]], dtype=np.float64)
+_DXXF = np.array([[-1, 2, -1]], dtype=np.float64)
+_DYYF = np.array([[-1], [2], [-1]], dtype=np.float64)
+_DXYF = np.array([[-1, 1], [1, -1]], dtype=np.float64)
+
+# Pre-flipped versions for forward convolution
+_DXF_FLIP = _DXF[:, ::-1][::-1, :]
+_DYF_FLIP = _DYF[::-1, :]
+_DXXF_FLIP = _DXXF[:, ::-1]
+_DYYF_FLIP = _DYYF[::-1, :]
+_DXYF_FLIP = _DXYF[::-1, ::-1]
+
 
 def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brief'):
     """
@@ -275,33 +289,26 @@ def _Kmult(f, ch, db_chs, lambda_cross_ch, lambda_tv):
 
     Returns a 3D array where each slice is a different gradient term.
     """
-    # Derivative filters
-    dxf = np.array([[-1, 1]])
-    dyf = np.array([[-1], [1]])
-    dxxf = np.array([[-1, 2, -1]])
-    dyyf = np.array([[-1], [2], [-1]])
-    dxyf = np.array([[-1, 1], [1, -1]])
-
     results = []
 
     # TV terms
     if lambda_tv > 1e-10:
         # First derivatives
-        fx = imconv(f, dxf[:, ::-1][::-1, :], 'full')
+        fx = imconv(f, _DXF_FLIP, 'full')
         fx = (lambda_tv * 0.5) * fx[:, 1:]
 
-        fy = imconv(f, dyf[::-1, :], 'full')
+        fy = imconv(f, _DYF_FLIP, 'full')
         fy = (lambda_tv * 0.5) * fy[1:, :]
 
         # Second derivatives (with smaller weight)
         sd_w = 0.15
-        fxx = imconv(f, dxxf[:, ::-1], 'full')
+        fxx = imconv(f, _DXXF_FLIP, 'full')
         fxx = (lambda_tv * sd_w) * fxx[:, 2:]
 
-        fyy = imconv(f, dyyf[::-1, :], 'full')
+        fyy = imconv(f, _DYYF_FLIP, 'full')
         fyy = (lambda_tv * sd_w) * fyy[2:, :]
 
-        fxy = imconv(f, dxyf[::-1, ::-1], 'full')
+        fxy = imconv(f, _DXYF_FLIP, 'full')
         fxy = (lambda_tv * sd_w) * fxy[1:, 1:]
 
         results.extend([fx, fy, fxx, fyy, fxy])
@@ -319,14 +326,14 @@ def _Kmult(f, ch, db_chs, lambda_cross_ch, lambda_tv):
             adj_img = db_chs[adj_ch]['image']
 
             # Cross-channel gradient coupling
-            diag_term = imconv(adj_img, dxf[:, ::-1][::-1, :], 'full')
+            diag_term = imconv(adj_img, _DXF_FLIP, 'full')
             diag_term = diag_term[:, 1:] * f
-            conv_term = imconv(f, dxf[:, ::-1][::-1, :], 'full')
+            conv_term = imconv(f, _DXF_FLIP, 'full')
             Sxf = (lam * 0.5) * (adj_img * conv_term[:, 1:] - diag_term)
 
-            diag_term = imconv(adj_img, dyf[::-1, :], 'full')
+            diag_term = imconv(adj_img, _DYF_FLIP, 'full')
             diag_term = diag_term[1:, :] * f
-            conv_term = imconv(f, dyf[::-1, :], 'full')
+            conv_term = imconv(f, _DYF_FLIP, 'full')
             Syf = (lam * 0.5) * (adj_img * conv_term[1:, :] - diag_term)
 
             results.extend([Sxf, Syf])
@@ -342,13 +349,6 @@ def _KSmult(f, ch, db_chs, lambda_cross_ch, lambda_tv):
     """
     Adjoint operator K*: transpose of the forward operator.
     """
-    # Derivative filters
-    dxf = np.array([[-1, 1]])
-    dyf = np.array([[-1], [1]])
-    dxxf = np.array([[-1, 2, -1]])
-    dyyf = np.array([[-1], [2], [-1]])
-    dxyf = np.array([[-1, 1], [1, -1]])
-
     result = np.zeros((f.shape[0], f.shape[1]))
 
     i = 0  # Index into the stacked gradient terms
@@ -356,25 +356,25 @@ def _KSmult(f, ch, db_chs, lambda_cross_ch, lambda_tv):
     # TV terms
     if lambda_tv > 1e-10:
         # First derivatives (adjoint)
-        fx = imconv((lambda_tv * 0.5) * f[:, :, i], dxf, 'full')
+        fx = imconv((lambda_tv * 0.5) * f[:, :, i], _DXF, 'full')
         result += fx[:, :-1]
         i += 1
 
-        fy = imconv((lambda_tv * 0.5) * f[:, :, i], dyf, 'full')
+        fy = imconv((lambda_tv * 0.5) * f[:, :, i], _DYF, 'full')
         result += fy[:-1, :]
         i += 1
 
         # Second derivatives
         sd_w = 0.15
-        fxx = imconv((lambda_tv * sd_w) * f[:, :, i], dxxf, 'full')
+        fxx = imconv((lambda_tv * sd_w) * f[:, :, i], _DXXF, 'full')
         result += fxx[:, :-2]
         i += 1
 
-        fyy = imconv((lambda_tv * sd_w) * f[:, :, i], dyyf, 'full')
+        fyy = imconv((lambda_tv * sd_w) * f[:, :, i], _DYYF, 'full')
         result += fyy[:-2, :]
         i += 1
 
-        fxy = imconv((lambda_tv * sd_w) * f[:, :, i], dxyf, 'full')
+        fxy = imconv((lambda_tv * sd_w) * f[:, :, i], _DXYF, 'full')
         result += fxy[:-1, :-1]
         i += 1
 
@@ -392,18 +392,18 @@ def _KSmult(f, ch, db_chs, lambda_cross_ch, lambda_tv):
 
             # X direction
             f_i = (lam * 0.5) * f[:, :, i]
-            diag_term = imconv(adj_img, dxf[:, ::-1][::-1, :], 'full')
+            diag_term = imconv(adj_img, _DXF_FLIP, 'full')
             diag_term = diag_term[:, 1:] * f_i
-            conv_term = imconv(adj_img * f_i, dxf, 'full')
+            conv_term = imconv(adj_img * f_i, _DXF, 'full')
             Sxtf = conv_term[:, :-1] - diag_term
             result += Sxtf
             i += 1
 
             # Y direction
             f_i = (lam * 0.5) * f[:, :, i]
-            diag_term = imconv(adj_img, dyf[::-1, :], 'full')
+            diag_term = imconv(adj_img, _DYF_FLIP, 'full')
             diag_term = diag_term[1:, :] * f_i
-            conv_term = imconv(adj_img * f_i, dyf, 'full')
+            conv_term = imconv(adj_img * f_i, _DYF, 'full')
             Sytf = conv_term[:-1, :] - diag_term
             result += Sytf
             i += 1

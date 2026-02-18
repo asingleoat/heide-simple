@@ -3,8 +3,12 @@ Utility functions for image deconvolution.
 """
 
 import numpy as np
+from functools import lru_cache
 from scipy import ndimage
 from scipy.fft import fft2
+
+# Cache for taper weights (keyed on PSF bytes and image shape)
+_taper_cache = {}
 
 
 def psf2otf(psf, shape):
@@ -104,37 +108,68 @@ def edgetaper(img, psf, n_iterations=1):
     psf = np.asarray(psf, dtype=np.float64)
 
     # Normalize PSF
-    psf = psf / psf.sum()
+    psf_norm = psf / psf.sum()
 
-    # Create tapering weights
-    weight = _create_taper_weights(psf, img.shape)
+    # Cache key: PSF bytes + image shape
+    cache_key = (psf_norm.tobytes(), psf_norm.shape, img.shape[:2])
+
+    # Get or create tapering weights
+    if cache_key in _taper_cache:
+        weight = _taper_cache[cache_key]
+    else:
+        weight = _create_taper_weights(psf_norm, img.shape)
+        _taper_cache[cache_key] = weight
 
     result = img.copy()
     for _ in range(n_iterations):
         # Blur the current result
-        blurred = ndimage.convolve(result, psf, mode='reflect')
+        blurred = ndimage.convolve(result, psf_norm, mode='reflect')
         # Blend: result = weight * result + (1 - weight) * blurred
         result = weight * result + (1 - weight) * blurred
 
     return result
 
 
-def _imconv_horizontal_optimized(f, k):
-    """Optimized convolution for horizontal 2-element kernel."""
-    # MATLAB: F_filt = K(1,2)*F(:,[1 1:end],:) + K(1,1)*F(:,[1:end end],:)
-    # K(1,2) is second element (Python k[0,1]), multiplies left-padded array
-    # K(1,1) is first element (Python k[0,0]), multiplies right-padded array
-    f_left_pad = np.pad(f, ((0, 0), (1, 0)), mode='edge')   # prepend first col
-    f_right_pad = np.pad(f, ((0, 0), (0, 1)), mode='edge')  # append last col
+def _imconv_horizontal_2(f, k):
+    """Optimized convolution for horizontal 2-element kernel (1x2)."""
+    f_left_pad = np.pad(f, ((0, 0), (1, 0)), mode='edge')
+    f_right_pad = np.pad(f, ((0, 0), (0, 1)), mode='edge')
     return k[0, 1] * f_left_pad + k[0, 0] * f_right_pad
 
 
-def _imconv_vertical_optimized(f, k):
-    """Optimized convolution for vertical 2-element kernel."""
-    # MATLAB: F_filt = K(2,1)*F([1 1:end],:,:) + K(1,1)*F([1:end end],:,:)
-    f_top_pad = np.pad(f, ((1, 0), (0, 0)), mode='edge')    # prepend first row
-    f_bot_pad = np.pad(f, ((0, 1), (0, 0)), mode='edge')    # append last row
+def _imconv_vertical_2(f, k):
+    """Optimized convolution for vertical 2-element kernel (2x1)."""
+    f_top_pad = np.pad(f, ((1, 0), (0, 0)), mode='edge')
+    f_bot_pad = np.pad(f, ((0, 1), (0, 0)), mode='edge')
     return k[1, 0] * f_top_pad + k[0, 0] * f_bot_pad
+
+
+def _imconv_horizontal_3(f, k):
+    """Optimized convolution for horizontal 3-element kernel (1x3)."""
+    # Full convolution: output width = input width + 2
+    f_padded = np.pad(f, ((0, 0), (2, 2)), mode='edge')
+    return (k[0, 0] * f_padded[:, :-2] +
+            k[0, 1] * f_padded[:, 1:-1] +
+            k[0, 2] * f_padded[:, 2:])
+
+
+def _imconv_vertical_3(f, k):
+    """Optimized convolution for vertical 3-element kernel (3x1)."""
+    # Full convolution: output height = input height + 2
+    f_padded = np.pad(f, ((2, 2), (0, 0)), mode='edge')
+    return (k[0, 0] * f_padded[:-2, :] +
+            k[1, 0] * f_padded[1:-1, :] +
+            k[2, 0] * f_padded[2:, :])
+
+
+def _imconv_2x2(f, k):
+    """Optimized convolution for 2x2 kernel."""
+    # Full convolution: output shape = (h+1, w+1)
+    f_padded = np.pad(f, ((1, 1), (1, 1)), mode='edge')
+    return (k[0, 0] * f_padded[:-1, :-1] +
+            k[0, 1] * f_padded[:-1, 1:] +
+            k[1, 0] * f_padded[1:, :-1] +
+            k[1, 1] * f_padded[1:, 1:])
 
 
 def imconv(f, k, mode='same'):
@@ -160,24 +195,30 @@ def imconv(f, k, mode='same'):
     f = np.asarray(f, dtype=np.float64)
     k = np.asarray(k, dtype=np.float64)
 
-    # Optimized paths for small gradient kernels
-    if k.shape == (1, 2) and mode == 'full':
-        return _imconv_horizontal_optimized(f, k)
-    elif k.shape == (2, 1) and mode == 'full':
-        return _imconv_vertical_optimized(f, k)
-    else:
-        # General case using scipy.signal.convolve2d
-        from scipy.signal import convolve2d
-        kh, kw = k.shape
-        if mode == 'full':
-            # Pad for 'full' convolution with replicate boundary
-            f_padded = np.pad(f, ((kh - 1, kh - 1), (kw - 1, kw - 1)), mode='edge')
-            return convolve2d(f_padded, k, mode='valid')
-        else: # 'same' mode
-            pad_h = kh // 2
-            pad_w = kw // 2
-            f_padded = np.pad(f, ((pad_h, kh - 1 - pad_h), (pad_w, kw - 1 - pad_w)), mode='edge')
-            return convolve2d(f_padded, k, mode='valid')
+    # Optimized paths for small gradient kernels (full mode only)
+    if mode == 'full':
+        if k.shape == (1, 2):
+            return _imconv_horizontal_2(f, k)
+        elif k.shape == (2, 1):
+            return _imconv_vertical_2(f, k)
+        elif k.shape == (1, 3):
+            return _imconv_horizontal_3(f, k)
+        elif k.shape == (3, 1):
+            return _imconv_vertical_3(f, k)
+        elif k.shape == (2, 2):
+            return _imconv_2x2(f, k)
+
+    # General case using scipy.signal.convolve2d
+    from scipy.signal import convolve2d
+    kh, kw = k.shape
+    if mode == 'full':
+        f_padded = np.pad(f, ((kh - 1, kh - 1), (kw - 1, kw - 1)), mode='edge')
+        return convolve2d(f_padded, k, mode='valid')
+    else:  # 'same' mode
+        pad_h = kh // 2
+        pad_w = kw // 2
+        f_padded = np.pad(f, ((pad_h, kh - 1 - pad_h), (pad_w, kw - 1 - pad_w)), mode='edge')
+        return convolve2d(f_padded, k, mode='valid')
 
 
 def img_to_norm_grayscale(img):
