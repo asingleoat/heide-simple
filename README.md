@@ -51,17 +51,17 @@ If you don't have a known PSF for your lens, you can estimate it using calibrati
 
 ```bash
 # Generate a calibration pattern to print
-./dev python estimate_psf.py --generate-pattern -o calibration.png
+./dev python estimate_psf.py --generate-pattern --output-dir ./
 
 # Estimate PSF from sharp/blurred image pair
-./dev python estimate_psf.py --sharp pinhole.png --blurred wide_aperture.png --size 31 -o psf.png
+./dev python estimate_psf.py --sharp pinhole.png --blurred wide_aperture.png --size 31 --output-dir ./
 ```
 
 ### Calibration Workflow
 
 1. **Generate calibration pattern**:
    ```bash
-   ./dev python estimate_psf.py --generate-pattern --patch-size 128 --grid 4x4 -o calibration.png
+   ./dev python estimate_psf.py --generate-pattern --patch-size 128 --grid 4x4 --output-dir ./
    ```
 
 2. **Print the pattern** and mount it flat
@@ -73,7 +73,7 @@ If you don't have a known PSF for your lens, you can estimate it using calibrati
 4. **Estimate PSF**:
    ```bash
    ./dev python estimate_psf.py --sharp-pattern sharp.png --blurred-pattern blurred.png \
-       --size 43 --grid 4x4 -o psf.png
+       --size 43 --grid 4x4 --output-dir ./psf_out
    ```
 
 ### Per-Channel PSF Estimation (Default)
@@ -82,7 +82,7 @@ For color images, per-channel PSF estimation is enabled by default. This account
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 31 -o psf
+    --size 31 --output-dir ./
 # Creates: psf_red.png, psf_green.png, psf_blue.png
 ```
 
@@ -90,7 +90,8 @@ To estimate a single grayscale PSF instead:
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 31 --grayscale -o psf.png
+    --size 31 --grayscale --output-dir ./
+# Creates: psf.png
 ```
 
 ### Multiscale PSF Estimation
@@ -99,7 +100,8 @@ For faster convergence on large PSFs, use scale-space estimation:
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 63 --multiscale -o psf.png
+    --size 63 --multiscale --output-dir ./
+# Creates: psf_red.png, psf_green.png, psf_blue.png (or psf.png with --grayscale)
 ```
 
 ### Spatially-Varying PSF (Tile-based)
@@ -108,13 +110,13 @@ For lenses with spatially-varying blur (e.g., wide-angle lenses with field curva
 
 ```bash
 ./dev python estimate_psf.py --sharp sharp.png --blurred blurred.png \
-    --size 31 --tiles 3x3 -o psf
+    --size 31 --tiles 3x3 --output-dir ./psf_out
 # For color images (default):
-# Creates: psf_red_tile_0_0.png, psf_green_tile_0_0.png, psf_blue_tile_0_0.png, ...
-# Plus combined grids: psf_red.png, psf_green.png, psf_blue.png
+# Creates: psf_out/psf_red_tile_0_0.png, psf_out/psf_green_tile_0_0.png, ...
+# Plus combined grids: psf_out/psf_red.png, psf_out/psf_green.png, psf_out/psf_blue.png
 
 # For grayscale (--grayscale flag):
-# Creates: psf_tile_0_0.png, psf_tile_0_1.png, ..., and psf.png (combined grid)
+# Creates: psf_out/psf_tile_0_0.png, psf_out/psf_tile_0_1.png, ..., and psf_out/psf.png (combined grid)
 ```
 
 ### PSF Estimation Options

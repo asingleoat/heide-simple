@@ -318,8 +318,9 @@ Kernel specification (one required):
             print(f"PSF size: {first_psf.shape[0]} x {first_psf.shape[1]}")
 
         # Run tiled deconvolution
+        n_tiles = tile_grid[0] * tile_grid[1]
         if args.verbose:
-            print("\nRunning tiled deconvolution...")
+            print(f"\nRunning tiled deconvolution ({n_tiles} tiles)...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
             print(f"  lambda_cross: {args.lambda_cross}")
@@ -353,8 +354,9 @@ Kernel specification (one required):
             print(f"Kernel size: {kernel.shape[0]} x {kernel.shape[1]}")
 
         # Run deconvolution
+        n_ch = image.shape[2] if image.ndim == 3 else 1
         if args.verbose:
-            print("\nRunning deconvolution...")
+            print(f"\nRunning deconvolution ({n_ch} channel{'s' if n_ch > 1 else ''})...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
             print(f"  lambda_cross: {args.lambda_cross}")
@@ -374,6 +376,9 @@ Kernel specification (one required):
     # Clip to valid range
     result = np.clip(result, 0, None)
 
+    if args.verbose:
+        print("\nDeconvolution complete. Post-processing...")
+
     # Apply gamma correction for display
     if not args.linear:
         result = np.power(result, 1.0 / args.gamma)
@@ -389,7 +394,7 @@ Kernel specification (one required):
 
     # Save result
     if args.verbose:
-        print(f"\nSaving result: {args.output}")
+        print(f"Saving result: {args.output}")
 
     iio.imwrite(args.output, result)
 

@@ -13,13 +13,13 @@ Based on:
 
 Usage:
     # Estimate PSF from sharp/blurred image pair
-    ./estimate_psf.py --sharp sharp.png --blurred blurred.png -o psf.png
+    ./estimate_psf.py --sharp sharp.png --blurred blurred.png --output-dir ./psf_out
 
     # Generate a calibration pattern
-    ./estimate_psf.py --generate-pattern -o calibration.png
+    ./estimate_psf.py --generate-pattern --output-dir ./
 
     # Estimate from calibration pattern images
-    ./estimate_psf.py --sharp-pattern sharp_calib.png --blurred-pattern blurred_calib.png -o psf.png
+    ./estimate_psf.py --sharp-pattern sharp_calib.png --blurred-pattern blurred_calib.png --output-dir ./psf_out
 """
 
 import argparse
@@ -47,20 +47,20 @@ def main():
         epilog="""
 Examples:
   # Estimate PSF from image pair (e.g., same scene with different apertures)
-  %(prog)s --sharp pinhole.png --blurred wide_aperture.png --size 31 -o psf.png
+  %(prog)s --sharp pinhole.png --blurred wide_aperture.png --size 31 --output-dir ./
 
   # Generate calibration pattern to print
-  %(prog)s --generate-pattern --patch-size 128 --grid 4x4 -o calibration.png
+  %(prog)s --generate-pattern --patch-size 128 --grid 4x4 --output-dir ./
 
   # Estimate from photos of calibration pattern
   %(prog)s --sharp-pattern sharp_photo.png --blurred-pattern blurred_photo.png \\
-           --size 43 --grid 4x4 -o psf.png
+           --size 43 --grid 4x4 --output-dir ./psf_out
 
   # Estimate single grayscale PSF instead of per-channel
-  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --grayscale -o psf.png
+  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --grayscale --output-dir ./
 
   # Estimate spatially-varying PSF (3x3 tile grid)
-  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --tiles 3x3 -o psf
+  %(prog)s --sharp sharp.png --blurred blurred.png --size 31 --tiles 3x3 --output-dir ./psf_tiles
         """,
     )
 

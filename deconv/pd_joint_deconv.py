@@ -72,9 +72,11 @@ def pd_joint_deconv(channels, lambda_params, max_it=200, tol=1e-4, verbose='brie
     ]
 
     # Process each row of lambda_params (startup iterations)
-    for s in range(lambda_params.shape[0]):
+    n_passes = lambda_params.shape[0]
+    for s in range(n_passes):
         if verbose in ('brief', 'all'):
-            print(f"\n### Startup iteration {s + 1} ###")
+            ch_idx = int(lambda_params[s, 0])
+            print(f"\n### Channel {ch_idx}/{n_channels} (pass {s + 1}/{n_passes}) ###")
 
         # Parse parameters for this iteration
         row = lambda_params[s]
@@ -255,10 +257,16 @@ def _pd_channel_deconv(channels, ch, x_0, db_chs,
             rel_diff = np.linalg.norm(diff.ravel()) / (np.linalg.norm(f_comp.ravel()) + 1e-10)
 
             if verbose in ('brief', 'all'):
-                print(f"Ch: {ch + 1}, iter {i + 1}, diff {rel_diff:.5g}")
+                print(f"  iter {i + 1}/{max_it}, diff {rel_diff:.5g}")
 
             if rel_diff < tol:
+                if verbose in ('brief', 'all'):
+                    print(f"  Converged at iteration {i + 1}")
                 break
+        else:
+            # Loop completed without break - max iterations reached
+            if verbose in ('brief', 'all'):
+                print(f"  Max iterations reached ({max_it})")
 
     return f1
 

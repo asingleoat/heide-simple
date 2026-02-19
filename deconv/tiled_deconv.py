@@ -366,6 +366,7 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
     if use_parallel:
         # Parallel processing using threads
         # NumPy/SciPy release the GIL during heavy computation, so threading works well
+        completed_count = 0
         with trace("parallel_tiles"):
             with ThreadPoolExecutor(max_workers=n_workers) as executor:
                 futures = {executor.submit(_process_tile_worker, args): args[0]
@@ -375,9 +376,11 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
                     tile_result = future.result()
                     tile_row = tile_result['tile_row']
                     tile_col = tile_result['tile_col']
+                    completed_count += 1
 
                     if verbose:
-                        print(f"  Completed tile ({tile_row}, {tile_col})")
+                        pct = 100.0 * completed_count / n_tiles
+                        print(f"  Completed tile ({tile_row}, {tile_col}) [{completed_count}/{n_tiles}, {pct:.0f}%]")
 
                     # Accumulate
                     y_start = tile_result['y_start']
@@ -392,7 +395,7 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
                     weights[y_start:y_end, x_start:x_end] += tile_weight
     else:
         # Sequential processing (original behavior)
-        for args in tile_args:
+        for tile_num, args in enumerate(tile_args, 1):
             tile_idx = args[0]
             tile_row = args[4]
             tile_col = args[5]
@@ -400,7 +403,8 @@ def deconvolve_tiled(image, psfs, tile_grid, overlap=0.25,
             if verbose:
                 y_start, y_end = args[6], args[7]
                 x_start, x_end = args[8], args[9]
-                print(f"\n--- Tile ({tile_row}, {tile_col}) ---")
+                pct = 100.0 * tile_num / n_tiles
+                print(f"\n--- Tile ({tile_row}, {tile_col}) [{tile_num}/{n_tiles}, {pct:.0f}%] ---")
                 print(f"  Region: [{y_start}:{y_end}, {x_start}:{x_end}]")
 
             with trace(f"deconv_tile_{tile_row}_{tile_col}"):
