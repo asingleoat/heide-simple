@@ -43,6 +43,36 @@ Deconvolve with a Gaussian blur estimate:
 ./dev python deconvolve.py blurry.jpg --gaussian 2.5 -o sharp.png
 ```
 
+## Example Workflow
+
+This repository includes example images to demonstrate the full workflow. The images `sharp-f8.jpg` (shot at f/8) and `blurry-f1.2.jpg` (shot at f/1.2 with the same lens) can be used to estimate the lens PSF and then deconvolve the blurry image.
+
+### Step 1: Estimate the PSF
+
+Use the simplified wrapper to estimate spatially-varying PSFs from the image pair:
+
+```bash
+./dev python estimate_psf_wrapper.py \
+    --sharp sharp-f8.jpg \
+    --blurred blurry-f1.2.jpg \
+    --output ./psf_out
+```
+
+This estimates a 3x4 grid of per-channel PSFs (accounting for chromatic aberration) and saves them to `./psf_out/`.
+
+### Step 2: Deconvolve the Blurry Image
+
+Use the deconvolution wrapper with the estimated PSFs:
+
+```bash
+./dev python deconvolve_wrapper.py \
+    --blurred blurry-f1.2.jpg \
+    --psf_folder ./psf_out \
+    --output sharp-restored.jpg
+```
+
+The wrapper automatically detects the tile grid from the PSF filenames and runs tiled deconvolution.
+
 ## PSF Estimation
 
 If you don't have a known PSF for your lens, you can estimate it using calibration images.
@@ -153,7 +183,7 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
                      [--kernel-size KERNEL_SIZE] [--channels {rgb,r,g,b,gray}]
                      [--lambda-res LAMBDA_RES] [--lambda-tv LAMBDA_TV]
                      [--lambda-cross LAMBDA_CROSS] [--max-iter MAX_ITER]
-                     [--tolerance TOLERANCE] [--linear] [--gamma GAMMA] [-v]
+                     [--tolerance TOLERANCE] [--linear] [--gamma GAMMA] [-q]
                      [--16bit]
                      input
 ```
@@ -184,7 +214,7 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 | **Other Options** | | |
 | `--linear` | off | Input is already linear (skip gamma decoding) |
 | `--gamma` | 2.2 | Gamma value for encoding/decoding |
-| `-v`, `--verbose` | off | Print progress information |
+| `-q`, `--quiet` | off | Suppress progress output |
 | `--16bit` | off | Save as 16-bit image |
 
 ### Examples
@@ -193,8 +223,8 @@ usage: deconvolve.py [-h] [-o OUTPUT] (--kernel KERNEL | --gaussian SIGMA)
 # Basic deconvolution with a PSF image
 ./dev python deconvolve.py photo.jpg --kernel measured_psf.png
 
-# Gaussian blur removal with verbose output
-./dev python deconvolve.py blurry.png --gaussian 3.0 -v -o sharp.png
+# Gaussian blur removal (use -q for quiet mode)
+./dev python deconvolve.py blurry.png --gaussian 3.0 -o sharp.png
 
 # Deconvolve with spatially-varying PSFs (from tiled estimation)
 # Automatically detects and uses per-channel PSFs if present

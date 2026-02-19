@@ -152,7 +152,7 @@ Examples:
   %(prog)s input.jpg --kernel psf.png
   %(prog)s input.jpg --gaussian 2.5 -o sharp.png
   %(prog)s input.jpg --kernel psf.png --lambda-res 100 --lambda-tv 3.0
-  %(prog)s blurry.png --kernel psf.png --channels r --verbose
+  %(prog)s blurry.png --kernel psf.png --channels r -q  # quiet mode
 
   # Deconvolve with spatially-varying PSFs (tiled)
   %(prog)s blurry.png --kernel-tiles ./psf_tiles/ --tiles 3x3 -o sharp.png
@@ -217,8 +217,8 @@ Kernel specification (one required):
                         help='Input is linear (skip gamma decoding)')
     parser.add_argument('--gamma', type=float, default=2.2,
                         help='Gamma value for encoding/decoding (default: 2.2)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Print progress information')
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help='Suppress progress output')
     parser.add_argument('--16bit', dest='bit16', action='store_true',
                         help='Save as 16-bit image')
     parser.add_argument('--trace', action='store_true',
@@ -248,7 +248,7 @@ Kernel specification (one required):
         args.output = args.input.with_stem(args.input.stem + '_deconv')
 
     # Load image
-    if args.verbose:
+    if not args.quiet:
         print(f"Loading image: {args.input}")
 
     with trace("load_image"):
@@ -264,14 +264,14 @@ Kernel specification (one required):
             if image.max() > 1.0:
                 image = image / image.max()
 
-    if args.verbose:
+    if not args.quiet:
         print(f"Image size: {image.shape[1]} x {image.shape[0]}")
         if image.ndim == 3:
             print(f"Channels: {image.shape[2]}")
 
     # Apply inverse gamma (linearize) if needed
     if not args.linear:
-        if args.verbose:
+        if not args.quiet:
             print(f"Applying inverse gamma (gamma={args.gamma})")
         with trace("gamma_decode"):
             image = np.power(image, args.gamma)
@@ -291,7 +291,7 @@ Kernel specification (one required):
     # Handle tiled vs single-kernel deconvolution
     if args.kernel_tiles:
         # Tiled PSF deconvolution
-        if args.verbose:
+        if not args.quiet:
             print(f"Loading tiled PSFs: {args.kernel_tiles}")
 
         # Parse tile grid if specified
@@ -306,7 +306,7 @@ Kernel specification (one required):
 
         psfs, tile_grid, is_per_channel = load_tiled_psfs(args.kernel_tiles, tiles_h, tiles_w)
 
-        if args.verbose:
+        if not args.quiet:
             if is_per_channel:
                 n_psfs = len(psfs['red'])
                 first_psf = psfs['red'][0]
@@ -319,7 +319,7 @@ Kernel specification (one required):
 
         # Run tiled deconvolution
         n_tiles = tile_grid[0] * tile_grid[1]
-        if args.verbose:
+        if not args.quiet:
             print(f"\nRunning tiled deconvolution ({n_tiles} tiles)...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
@@ -337,25 +337,25 @@ Kernel specification (one required):
             max_iterations=args.max_iter,
             tolerance=args.tolerance,
             n_workers=args.workers,
-            verbose=args.verbose
+            verbose=not args.quiet
         )
     else:
         # Single kernel deconvolution
         if args.kernel:
-            if args.verbose:
+            if not args.quiet:
                 print(f"Loading kernel: {args.kernel}")
             kernel = load_kernel(args.kernel, args.kernel_size)
         else:
-            if args.verbose:
+            if not args.quiet:
                 print(f"Creating Gaussian kernel (sigma={args.gaussian})")
             kernel = create_gaussian_kernel(args.gaussian, args.kernel_size)
 
-        if args.verbose:
+        if not args.quiet:
             print(f"Kernel size: {kernel.shape[0]} x {kernel.shape[1]}")
 
         # Run deconvolution
         n_ch = image.shape[2] if image.ndim == 3 else 1
-        if args.verbose:
+        if not args.quiet:
             print(f"\nRunning deconvolution ({n_ch} channel{'s' if n_ch > 1 else ''})...")
             print(f"  lambda_residual: {args.lambda_res}")
             print(f"  lambda_tv: {args.lambda_tv}")
@@ -370,13 +370,13 @@ Kernel specification (one required):
             lambda_cross=args.lambda_cross,
             max_iterations=args.max_iter,
             tolerance=args.tolerance,
-            verbose=args.verbose
+            verbose=not args.quiet
         )
 
     # Clip to valid range
     result = np.clip(result, 0, None)
 
-    if args.verbose:
+    if not args.quiet:
         print("\nDeconvolution complete. Post-processing...")
 
     # Apply gamma correction for display
@@ -393,7 +393,7 @@ Kernel specification (one required):
         result = (result * 255).astype(np.uint8)
 
     # Save result
-    if args.verbose:
+    if not args.quiet:
         print(f"Saving result: {args.output}")
 
     iio.imwrite(args.output, result)

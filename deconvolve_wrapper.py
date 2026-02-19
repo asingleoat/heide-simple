@@ -85,8 +85,7 @@ Example:
         '--kernel-tiles', str(kernel_tiles_base_arg),
         '--tiles', tiles,
         '--workers', str(workers),
-        '-o', str(args.output),
-        '--verbose'
+        '-o', str(args.output)
     ]
 
     try:
