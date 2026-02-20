@@ -24,7 +24,7 @@ Required Python packages (if not using Nix):
 - scikit-image
 - imageio
 
-To install these, you can use pip:
+To install these, you can use pip, you probably also want to use a python venv, ask an LLM for advice:
 ```bash
 pip install -r requirements.txt
 ```
