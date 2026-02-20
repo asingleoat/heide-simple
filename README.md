@@ -1,6 +1,6 @@
 # Primal-Dual Cross-Channel Deconvolution
 
-Python port of the primal-dual cross-channel deconvolution algorithm from:
+Claude Code and Google Gemini driven Python port of the primal-dual cross-channel deconvolution algorithm from:
 
 > F. Heide, M. Rouf, M. Hullin, B. Labitzke, W. Heidrich, A. Kolb.
 > "High-Quality Computational Imaging Through Simple Lenses."
