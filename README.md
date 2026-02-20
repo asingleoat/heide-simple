@@ -379,4 +379,10 @@ Run the test script to verify the algorithms:
 
 ## License
 
-The original MATLAB code is by Felix Heide (fheide@cs.ubc.ca). This Python port follows the same academic use terms. Please cite the original paper if you use this code in research.
+This code is released under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE) for details.
+
+This is an independent Python implementation based on the algorithms described in the original paper. If you use this code in research, please cite the original paper:
+
+> F. Heide, M. Rouf, M. Hullin, B. Labitzke, W. Heidrich, A. Kolb.
+> "High-Quality Computational Imaging Through Simple Lenses."
+> ACM Transactions on Graphics (ToG), 2013
