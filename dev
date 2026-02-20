@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# `./dev <cmd>` to run your <cmd> in the nix-shell, especially useful for coding assistants started outside the shell (say because they're editing the shell)
+
 # If we're already inside nix, just run.
 if [[ -n "${IN_NIX_SHELL:-}" ]]; then
   exec "$@"
