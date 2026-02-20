@@ -348,19 +348,10 @@ If you see artifacts in the output:
 | Over-smoothed details | Decrease `--tv` (try 0.5-1.0) |
 | Color fringing | Increase `--cross` (try 5.0-10.0) |
 
-## Running the Demo
-
-```bash
-./dev python demo.py
-```
-
-This creates synthetic test data with chromatic aberration and demonstrates the cross-channel deconvolution. Results are saved to `output/`.
-
 ## Files
 
 - `deconvolve.py` - Command-line deconvolution tool
 - `estimate_psf.py` - Command-line PSF estimation tool
-- `demo.py` - Demonstration script with synthetic data
 - `test_algorithms.py` - Test script to verify algorithms
 - `deconv/` - Core algorithm package
   - `pd_joint_deconv.py` - Main primal-dual deconvolution algorithm
