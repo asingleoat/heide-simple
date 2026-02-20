@@ -45,7 +45,7 @@ Deconvolve with a Gaussian blur estimate:
 
 ## Example Workflow
 
-This repository includes example images to demonstrate the full workflow. The images `sharp-f8.jpg` (shot at f/8) and `blurry-f1.2.jpg` (shot at f/1.2 with the same lens) can be used to estimate the lens PSF and then deconvolve the blurry image.
+This repository includes example images to demonstrate the full workflow. The images `sharp-f8.jpg` (shot at f/8) and `blurry-f1.2.jpg` (shot at f/1.2 with the same lens) can be used to estimate the lens PSF and then deconvolve the blurry image. WARNING: this will take a very long time, this is horrendously computationally expensive, and these are very high resolution pics.
 
 ### Step 1: Estimate the PSF
 
