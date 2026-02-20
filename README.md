@@ -62,7 +62,7 @@ Use the simplified wrapper to estimate spatially-varying PSFs from the image pai
     --output ./psf_out
 ```
 
-This estimates a 3x4 grid of per-channel PSFs (accounting for chromatic aberration) and saves them to `./psf_out/`.
+This estimates a 3x4 grid of per-channel PSFs (accounting for chromatic aberration) and saves them to `./psf_out/`. Note that the real world workflow is to then use these computed PSFs for all new images with this lens, though we'll only be using them to deconvole one image, and worse we'll only be using it to deconvolve the original blurry image used in calibration.
 
 ### Step 2: Deconvolve the Blurry Image
 
